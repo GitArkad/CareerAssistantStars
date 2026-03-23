@@ -1,48 +1,35 @@
-# === Данные баз данных (Критично!) ===
-# Эти папки создаются Docker-ом на твоем диске. Их нельзя пушить.
-postgres_data/
-qdrant_data/
-
-# === Специфика Airflow ===
-# Airflow создает много мусора и локальную БД для своих нужд
-airflow/logs/
-airflow/airflow.db
-airflow/airflow-webserver.pid
-airflow/webserver_config.py
-standalone_admin_password.txt
-
-# === Секреты (убедись, что они есть в списке) ===
+# =========================
+# Secrets / local config
+# =========================
 .env
 .env.local
 .env.dev
+.envrc
+.pypirc
 
-# === Специфика Ubuntu / IDE ===
-.DS_Store
-.directory
-*.swp
-.vscode/
-.idea/
-
-# === Тестовые данные и логи ===
-data/*.csv
-data/*.json
-!data/.gitkeep
-logs/
-*.log
-
-
-# Byte-compiled / optimized / DLL files
+# =========================
+# Python
+# =========================
 __pycache__/
 *.py[codz]
 *$py.class
-
-# C extensions
 *.so
 
-# Distribution / packaging
+# =========================
+# Virtual environments
+# =========================
+.venv/
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# =========================
+# Build / packaging
+# =========================
 .Python
 build/
-develop-eggs/
 dist/
 downloads/
 eggs/
@@ -59,17 +46,25 @@ share/python-wheels/
 *.egg
 MANIFEST
 
-# PyInstaller
-#  Usually these files are written by a python script from a template
-#  before PyInstaller builds the exe, so as to inject date/other infos into it.
+# =========================
+# Installer / generated files
+# =========================
 *.manifest
 *.spec
-
-# Installer logs
 pip-log.txt
 pip-delete-this-directory.txt
 
-# Unit test / coverage reports
+# =========================
+# Logs / runtime
+# =========================
+logs/
+*.log
+*.pid
+*.out
+
+# =========================
+# Tests / coverage
+# =========================
 htmlcov/
 .tox/
 .nox/
@@ -84,159 +79,94 @@ coverage.xml
 .pytest_cache/
 cover/
 
-# Translations
-*.mo
-*.pot
-
-# Django stuff:
-*.log
-local_settings.py
+# =========================
+# Local DB / app files
+# =========================
 db.sqlite3
 db.sqlite3-journal
-
-# Flask stuff:
+local_settings.py
 instance/
 .webassets-cache
-
-# Scrapy stuff:
 .scrapy
 
-# Sphinx documentation
+# =========================
+# Docs / notebooks
+# =========================
 docs/_build/
-
-# PyBuilder
-.pybuilder/
-target/
-
-# Jupyter Notebook
-.ipynb_checkpoints
-
-# IPython
+site/
+.ipynb_checkpoints/
 profile_default/
 ipython_config.py
 
-# pyenv
-#   For a library or package, you might want to ignore these files since the code is
-#   intended to run in multiple environments; otherwise, check them in:
-# .python-version
-
-# pipenv
-#   According to pypa/pipenv#598, it is recommended to include Pipfile.lock in version control.
-#   However, in case of collaboration, if having platform-specific dependencies or dependencies
-#   having no cross-platform support, pipenv may install dependencies that don't work, or not
-#   install all needed dependencies.
-#Pipfile.lock
-
-# UV
-#   Similar to Pipfile.lock, it is generally recommended to include uv.lock in version control.
-#   This is especially recommended for binary packages to ensure reproducibility, and is more
-#   commonly ignored for libraries.
-#uv.lock
-
-# poetry
-#   Similar to Pipfile.lock, it is generally recommended to include poetry.lock in version control.
-#   This is especially recommended for binary packages to ensure reproducibility, and is more
-#   commonly ignored for libraries.
-#   https://python-poetry.org/docs/basic-usage/#commit-your-poetrylock-file-to-version-control
-#poetry.lock
-#poetry.toml
-
-# pdm
-#   Similar to Pipfile.lock, it is generally recommended to include pdm.lock in version control.
-#   pdm recommends including project-wide configuration in pdm.toml, but excluding .pdm-python.
-#   https://pdm-project.org/en/latest/usage/project/#working-with-version-control
-#pdm.lock
-#pdm.toml
-.pdm-python
-.pdm-build/
-
-# pixi
-#   Similar to Pipfile.lock, it is generally recommended to include pixi.lock in version control.
-#pixi.lock
-#   Pixi creates a virtual environment in the .pixi directory, just like venv module creates one
-#   in the .venv directory. It is recommended not to include this directory in version control.
-.pixi
-
-# PEP 582; used by e.g. github.com/David-OConnor/pyflow and github.com/pdm-project/pdm
-__pypackages__/
-
-# Celery stuff
-celerybeat-schedule
-celerybeat.pid
-
-# SageMath parsed files
-*.sage.py
-
-# Environments
-.env
-.envrc
-.venv
-env/
-venv/
-ENV/
-env.bak/
-venv.bak/
-
-# Spyder project settings
-.spyderproject
-.spyproject
-
-# Rope project settings
-.ropeproject
-
-# mkdocs documentation
-/site
-
-# mypy
+# =========================
+# Type checking / lint
+# =========================
 .mypy_cache/
 .dmypy.json
 dmypy.json
-
-# Pyre type checker
 .pyre/
-
-# pytype static type analyzer
 .pytype/
-
-# Cython debug symbols
+.ruff_cache/
 cython_debug/
 
-# PyCharm
-#  JetBrains specific template is maintained in a separate JetBrains.gitignore that can
-#  be found at https://github.com/github/gitignore/blob/main/Global/JetBrains.gitignore
-#  and can be added to the global gitignore or merged into this file.  For a more nuclear
-#  option (not recommended) you can uncomment the following to ignore the entire idea folder.
-#.idea/
+# =========================
+# Package managers
+# =========================
+.pdm-python
+.pdm-build/
+.pixi/
+__pypackages__/
 
-# Abstra
-# Abstra is an AI-powered process automation framework.
-# Ignore directories containing user credentials, local state, and settings.
-# Learn more at https://abstra.io/docs
-.abstra/
+# =========================
+# IDE / OS
+# =========================
+.DS_Store
+.directory
+*.swp
+.vscode/
+.idea/
+.spyderproject
+.spyproject
+.ropeproject
 
-# Visual Studio Code
-#  Visual Studio Code specific template is maintained in a separate VisualStudioCode.gitignore 
-#  that can be found at https://github.com/github/gitignore/blob/main/Global/VisualStudioCode.gitignore
-#  and can be added to the global gitignore or merged into this file. However, if you prefer, 
-#  you could uncomment the following to ignore the entire vscode folder
-# .vscode/
-
-# Ruff stuff:
-.ruff_cache/
-
-# PyPI configuration file
-.pypirc
-
-# Cursor
-#  Cursor is an AI-powered code editor. `.cursorignore` specifies files/directories to
-#  exclude from AI features like autocomplete and code analysis. Recommended for sensitive data
-#  refer to https://docs.cursor.com/context/ignore-files
+# =========================
+# Cursor / AI editors
+# =========================
 .cursorignore
 .cursorindexingignore
+.abstra/
 
+# =========================
+# Celery
+# =========================
+celerybeat-schedule
+celerybeat.pid
+
+# =========================
 # Marimo
+# =========================
 marimo/_static/
 marimo/_lsp/
 __marimo__/
 
+# =========================
+# Docker / local persistent data
+# =========================
+postgres_data/
+qdrant_data/
 
+# =========================
+# Airflow
+# =========================
+airflow/config/airflow.cfg
+standalone_admin_password.txt
+airflow.db
+airflow-webserver.pid
+webserver_config.py
+
+# =========================
+# Local parsed/exported data
+# =========================
+data/*.csv
+data/*.json
+!data/.gitkeep

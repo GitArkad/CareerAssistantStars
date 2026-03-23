@@ -1,0 +1,12 @@
+# --- DAGs / ETL helpers ---
+pandas==2.2.1
+pypdf==4.1.0
+python-dotenv==1.0.1
+requests==2.31.0
+
+# --- Project DB access ---
+psycopg2-binary==2.9.9
+
+# --- Optional resume parsing ---
+python-docx==1.1.0
+docx2txt==0.8
