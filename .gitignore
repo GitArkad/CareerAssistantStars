@@ -1,3 +1,36 @@
+# === Данные баз данных (Критично!) ===
+# Эти папки создаются Docker-ом на твоем диске. Их нельзя пушить.
+postgres_data/
+qdrant_data/
+
+# === Специфика Airflow ===
+# Airflow создает много мусора и локальную БД для своих нужд
+airflow/logs/
+airflow/airflow.db
+airflow/airflow-webserver.pid
+airflow/webserver_config.py
+standalone_admin_password.txt
+
+# === Секреты (убедись, что они есть в списке) ===
+.env
+.env.local
+.env.dev
+
+# === Специфика Ubuntu / IDE ===
+.DS_Store
+.directory
+*.swp
+.vscode/
+.idea/
+
+# === Тестовые данные и логи ===
+data/*.csv
+data/*.json
+!data/.gitkeep
+logs/
+*.log
+
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
@@ -205,3 +238,5 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+

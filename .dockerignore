@@ -1,0 +1,27 @@
+# Игнорируем виртуальные окружения
+venv/
+.venv/
+env/
+
+# Игнорируем данные баз данных (они монтируются через volumes)
+postgres_data/
+qdrant_data/
+
+# Игнорируем логи и временные файлы Airflow
+airflow/logs/
+airflow/airflow.db
+airflow/airflow-webserver.pid
+
+# Игнорируем локальные конфиги и секреты
+.env
+.git/
+.gitignore
+
+# Игнорируем кэш Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Игнорируем системный мусор
+.DS_Store
+.directory

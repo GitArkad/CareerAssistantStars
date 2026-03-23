@@ -1,0 +1,8 @@
+# Создаем структуру папок
+mkdir -p airflow/dags airflow/scripts backend/app/agents/nodes backend/app/db frontend/pages data docker notebooks images src airflow/logs
+
+# Добавляем .gitkeep в пустые папки
+touch airflow/logs/.gitkeep data/.gitkeep notebooks/.gitkeep images/.gitkeep src/.gitkeep airflow/dags/.gitkeep  airflow/scripts/.gitkeep backend/app/agents/nodes/.gitkeep backend/app/db/.gitkeep docker/.gitkeep frontend/pages.gitkeep 
+
+# Создаем файлы игнорирования и пример конфига
+touch .dockerignore .env.example
