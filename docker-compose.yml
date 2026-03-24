@@ -59,6 +59,7 @@ x-airflow-common: &airflow-common
     - ./airflow/config:/opt/airflow/config
     - ./airflow/plugins:/opt/airflow/plugins
     - ./airflow/scripts:/opt/airflow/scripts
+    - ./airflow/output_global:/opt/airflow/output_global
   user: "${AIRFLOW_UID}:0"
   depends_on: &airflow-common-depends-on
     redis:

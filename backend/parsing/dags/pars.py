@@ -21,7 +21,8 @@ from bs4 import BeautifulSoup
 from urllib.parse import urljoin, urlparse
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
-
+from to_postgres import load_to_postgres
+from data_cleaner import clean_data
 # ============================================================================
 # ⚙️ ГЛОБАЛЬНЫЕ НАСТРОЙКИ
 # ============================================================================
@@ -999,8 +1000,20 @@ def main():
         target_per_source=10000
     )
 
-def run_pipeline():
-    main()
-    
+
+#for data cleaner
+raw_path = OUTPUT_DIR + MAIN_OUTPUT_FILE
+clean_path = OUTPUT_DIR + "it_vacancies_clean.csv"
+
+clean_data(
+    input_path=raw_path,
+    output_path=clean_path
+)
+#for to_postgres
+load_to_postgres(
+    csv_path=OUTPUT_DIR + "it_vacancies_clean.csv",
+    table_name="jobs"
+)
+
 if __name__ == "__main__":
     main()
