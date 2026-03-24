@@ -60,25 +60,25 @@ services:
   # PROJECT DATABASES
   # ──────────────────────────────────────────────
 
-project-postgres:
-  image: postgres:16
-  container_name: project-postgres
-  environment:
-    POSTGRES_DB: ${POSTGRES_DB}
-    POSTGRES_USER: ${POSTGRES_USER}
-    POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-  ports:
-    - "5433:5432"
-  volumes:
-    - project-postgres-data:/var/lib/postgresql/data
-  healthcheck:
-    test: ["CMD", "pg_isready", "-U", "${POSTGRES_USER}", "-d", "${POSTGRES_DB}"]
-    interval: 10s
-    retries: 5
-    start_period: 5s
-  restart: always
-  networks:
-    - app-network
+  project-postgres:
+    image: postgres:16
+    container_name: project-postgres
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    ports:
+      - "5433:5432"
+    volumes:
+      - project-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "${POSTGRES_USER}", "-d", "${POSTGRES_DB}"]
+      interval: 10s
+      retries: 5
+      start_period: 5s
+    restart: always
+    networks:
+      - app-network
 
   qdrant:
     image: qdrant/qdrant:v1.13.2
@@ -93,9 +93,9 @@ project-postgres:
     networks:
       - app-network
 
-  # ──────────────────────────────────────────────
-  # BACKEND (FastAPI)
-  # ──────────────────────────────────────────────
+    # ──────────────────────────────────────────────
+    # BACKEND (FastAPI)
+    # ──────────────────────────────────────────────
 
   backend:
     build:
@@ -125,9 +125,9 @@ project-postgres:
     networks:
       - app-network
 
-  # ──────────────────────────────────────────────
-  # FRONTEND (Streamlit)
-  # ──────────────────────────────────────────────
+    # ──────────────────────────────────────────────
+    # FRONTEND (Streamlit)
+    # ──────────────────────────────────────────────
 
   frontend:
     build:
@@ -149,27 +149,27 @@ project-postgres:
     networks:
       - app-network
 
-  # ──────────────────────────────────────────────
-  # AIRFLOW — PostgreSQL (separate from project DB)
-  # ──────────────────────────────────────────────
+    # ──────────────────────────────────────────────
+    # AIRFLOW — PostgreSQL (separate from project DB)
+    # ──────────────────────────────────────────────
 
   airflow-postgres:
-  image: postgres:16
-  container_name: airflow-postgres
-  environment:
-    POSTGRES_USER: ${AIRFLOW_POSTGRES_USER}
-    POSTGRES_PASSWORD: ${AIRFLOW_POSTGRES_PASSWORD}
-    POSTGRES_DB: ${AIRFLOW_POSTGRES_DB}
-  volumes:
-    - airflow-postgres-data:/var/lib/postgresql/data
-  healthcheck:
-    test: ["CMD", "pg_isready", "-U", "${AIRFLOW_POSTGRES_USER}", "-d", "${AIRFLOW_POSTGRES_DB}"]
-    interval: 10s
-    retries: 5
-    start_period: 5s
-  restart: always
-  networks:
-    - app-network
+    image: postgres:16
+    container_name: airflow-postgres
+    environment:
+      POSTGRES_USER: ${AIRFLOW_POSTGRES_USER}
+      POSTGRES_PASSWORD: ${AIRFLOW_POSTGRES_PASSWORD}
+      POSTGRES_DB: ${AIRFLOW_POSTGRES_DB}
+    volumes:
+      - airflow-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "${AIRFLOW_POSTGRES_USER}", "-d", "${AIRFLOW_POSTGRES_DB}"]
+      interval: 10s
+      retries: 5
+      start_period: 5s
+    restart: always
+    networks:
+      - app-network
 
   # ──────────────────────────────────────────────
   # AIRFLOW — Redis (Celery broker)
@@ -305,12 +305,12 @@ project-postgres:
         /entrypoint airflow config list >/dev/null
         chown -R "${AIRFLOW_UID}:0" /opt/airflow/
         chown -v -R "${AIRFLOW_UID}:0" /opt/airflow/{logs,dags,plugins,config}
-  environment:
-    <<: *airflow-common-env
-    _AIRFLOW_DB_MIGRATE: 'true'
-    _AIRFLOW_WWW_USER_CREATE: 'true'
-    _AIRFLOW_WWW_USER_USERNAME: ${_AIRFLOW_WWW_USER_USERNAME}
-    _AIRFLOW_WWW_USER_PASSWORD: ${_AIRFLOW_WWW_USER_PASSWORD}
+    environment:
+      <<: *airflow-common-env
+      _AIRFLOW_DB_MIGRATE: 'true'
+      _AIRFLOW_WWW_USER_CREATE: 'true'
+      _AIRFLOW_WWW_USER_USERNAME: ${_AIRFLOW_WWW_USER_USERNAME}
+      _AIRFLOW_WWW_USER_PASSWORD: ${_AIRFLOW_WWW_USER_PASSWORD}
     user: "0:0"
     networks:
       - app-network
