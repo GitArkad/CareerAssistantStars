@@ -24,9 +24,9 @@ x-airflow-common: &airflow-common
     AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: "true"
     AIRFLOW_CONFIG: /opt/airflow/config/airflow.cfg
     EMAIL_YOUR: ${EMAIL_YOUR}
-    ADZUNA_APP_ID: ${ADZUNA_APP_ID_YOUR}
-    ADZUNA_APP_KEY: ${ADZUNA_APP_KEY_YOUR}
-    USAJOBS_API_KEY: ${USAJOBS_API_KEY_YOUR}
+    ADZUNA_APP_ID: ${ADZUNA_APP_ID}
+    ADZUNA_APP_KEY: ${ADZUNA_APP_KEY}
+    USAJOBS_API_KEY: ${USAJOBS_API_KEY}
     PYTHONPATH: /opt/airflow/project
 
     POSTGRES_DB: ${POSTGRES_DB}
@@ -143,14 +143,14 @@ services:
     image: qdrant/qdrant:v1.13.2
     container_name: qdrant
     ports:
-      - "6333:6333"
-      - "6334:6334"
+      - "6335:6333"
+      - "6336:6334"
     volumes:
       - qdrant-data:/qdrant/storage
       - qdrant-snapshots:/qdrant/snapshots
     restart: unless-stopped
     networks:
-      - app-network
+    - app-network
 
   redis:
     image: redis:7.2-bookworm
@@ -392,9 +392,9 @@ services:
       _AIRFLOW_WWW_USER_USERNAME: ${_AIRFLOW_WWW_USER_USERNAME}
       _AIRFLOW_WWW_USER_PASSWORD: ${_AIRFLOW_WWW_USER_PASSWORD}
       EMAIL_YOUR: ${EMAIL_YOUR}
-      ADZUNA_APP_ID: ${ADZUNA_APP_ID_YOUR}
-      ADZUNA_APP_KEY: ${ADZUNA_APP_KEY_YOUR}
-      USAJOBS_API_KEY: ${USAJOBS_API_KEY_YOUR}
+      ADZUNA_APP_ID: ${ADZUNA_APP_ID}
+      ADZUNA_APP_KEY: ${ADZUNA_APP_KEY}
+      USAJOBS_API_KEY: ${USAJOBS_API_KEY}
       PYTHONPATH: /opt/airflow/project
     user: "0:0"
     networks:
