@@ -35,70 +35,79 @@ def init_db_uuid():
         vectors_config=client.get_fastembed_vector_params(),
     )
 
-    # 2. Полный список вакансий с полем 'country'
+    # 2. Полный список вакансий с полем 'country' и новым полем 'url'
     raw_vacancies: List[Dict[str, Any]] = [
         {
             "title": "Junior ML Engineer", "company": "SberAI", "city": "Moscow", "country": "Russia",
             "work_format": "Office", "relocation": False, "grade": "Junior",
             "salary_from": 150000, "salary_to": 200000, "currency": "RUB", 
             "skills": ["Python", "PyTorch", "SQL"],
-            "description": "Разработка моделей в московском офисе. Удаленки нет."
+            "description": "Разработка моделей в московском офисе. Удаленки нет.",
+            "url": "https://career.sber.ru/vacancies/sberai-jr-ml"
         },
         {
             "title": "AI Developer", "company": "Global Tech", "city": "Remote", "country": "Germany",
             "work_format": "Remote", "relocation": True, "grade": "Middle",
             "salary_from": 4500, "salary_to": None, "currency": "USD", 
             "skills": ["Python", "Docker"],
-            "description": "Full remote. We help with relocation to EU countries."
+            "description": "Full remote. We help with relocation to EU countries.",
+            "url": "https://globaltech.com/careers/ai-dev-remote"
         },
         {
             "title": "ML Разработчик (NLP)", "company": "T-Bank", "city": "Saint-Petersburg", "country": "Russia",
             "work_format": "Hybrid", "relocation": True, "grade": "Middle",
             "salary_from": None, "salary_to": None, "currency": "RUB", 
             "skills": ["Python", "Transformers"],
-            "description": "Гибридный график (2-3 дня в офисе). Помогаем с переездом."
+            "description": "Гибридный график (2-3 дня в офисе). Помогаем с переездом.",
+            "url": "https://tbank.ru/career/it/ml-nlp"
         },
         {
             "title": "Data Scientist", "company": "Ozon", "city": "Moscow", "country": "Russia",
             "work_format": "Hybrid", "relocation": False, "grade": "Middle", 
             "salary_from": 170000, "salary_to": 250000, "currency": "RUB", 
             "skills": ["SQL", "Pandas", "CatBoost"],
-            "description": "Анализ данных для маркетплейса. Гибрид в Москве."
+            "description": "Анализ данных для маркетплейса. Гибрид в Москве.",
+            "url": "https://job.ozon.ru/vacancy/ds-middle"
         },
         {
             "title": "NLP Researcher", "company": "OpenAI Partner", "city": "San Francisco", "country": "USA",
             "work_format": "Office", "relocation": True, "grade": "Senior",
             "salary_from": 5500, "salary_to": 8500, "currency": "USD", 
             "skills": ["Python", "LLM", "LangChain"],
-            "description": "Research and development of agentic workflows."
+            "description": "Research and development of agentic workflows.",
+            "url": "https://openaipartner.ai/jobs/nlp-senior-researcher"
         },
         {
             "title": "Computer Vision Engineer", "company": "DeepVision", "city": "Belgrade", "country": "Serbia",
             "work_format": "Office", "relocation": True, "grade": "Middle",
             "salary_from": 3000, "salary_to": 4500, "currency": "EUR", 
             "skills": ["OpenCV", "C++", "PyTorch"],
-            "description": "Разработка систем распознавания лиц. Релокационный пакет."
+            "description": "Разработка систем распознавания лиц. Релокационный пакет.",
+            "url": "https://deepvision.rs/career/cv-engineer"
         },
         {
             "title": "MLOps Engineer", "company": "Fintech Global", "city": "Astana", "country": "Kazakhstan",
             "work_format": "Hybrid", "relocation": False, "grade": "Middle",
             "salary_from": 2500, "salary_to": 3500, "currency": "USD", 
             "skills": ["Kubernetes", "MLflow", "Python"],
-            "description": "Поддержка жизненного цикла моделей. Офис в центре Астаны."
+            "description": "Поддержка жизненного цикла моделей. Офис в центре Астаны.",
+            "url": "https://fintechglobal.kz/jobs/mlops"
         },
         {
             "title": "Junior Data Analyst", "company": "Retail Group", "city": "Minsk", "country": "Belarus",
             "work_format": "Office", "relocation": False, "grade": "Junior",
             "salary_from": 1000, "salary_to": 1500, "currency": "USD", 
             "skills": ["SQL", "Tableau", "Excel"],
-            "description": "Аналитика продаж. Отличный старт для карьеры."
+            "description": "Аналитика продаж. Отличный старт для карьеры.",
+            "url": "https://retailgroup.by/vacancies/jr-data-analyst"
         },
         {
             "title": "Lead AI Architect", "company": "Neural Systems", "city": "Limassol", "country": "Cyprus",
             "work_format": "Remote", "relocation": True, "grade": "Senior",
             "salary_from": 6000, "salary_to": 9000, "currency": "EUR", 
             "skills": ["PyTorch", "System Design", "Cloud Architecture"],
-            "description": "Проектирование архитектуры ИИ-продуктов. Налоговые льготы Кипра."
+            "description": "Проектирование архитектуры ИИ-продуктов. Налоговые льготы Кипра.",
+            "url": "https://neuralsystems.cy/careers/lead-ai-arch"
         }
     ]
 

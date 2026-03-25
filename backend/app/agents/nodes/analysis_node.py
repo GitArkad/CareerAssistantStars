@@ -133,7 +133,7 @@ def analysis_node(state: AgentState):
     
     market_context = {
         "top_vacancies": top_vacancies[:5],
-        "match_score": round(np.mean([v["match_score"] for v in top_vacancies[:3]]), 1) if top_vacancies else 0.0,
+        "match_score": round(float(np.mean([v["match_score"] for v in top_vacancies[:3]])), 1) if top_vacancies else 0.0,
         "skill_gaps": [skill for skill, count in gap_counter.most_common(10)],
         "salary_median": int(np.median(sal_np)),
         "salary_top_10": int(np.percentile(sal_np, 90)) if salaries else 0,

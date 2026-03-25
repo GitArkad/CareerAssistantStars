@@ -2,6 +2,8 @@ from app.agents.state import AgentState
 from app.agents.services.parser import ResumeParser
 from app.agents.utils import get_extraction_chain 
 from app.agents.services.taxonomy import IT_DS_TAXONOMY
+import fitz  # PyMuPDF
+import io
 
 def ingestion_node(state: AgentState):
     print("--- ЗАПУСК: INGESTION (Валидация и Очистка) ---")

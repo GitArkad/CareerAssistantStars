@@ -1,5 +1,6 @@
-from typing import Annotated, List, Optional, TypedDict, Dict, Any
+from typing import Annotated, List, Optional, TypedDict, Dict, Any, Sequence
 import operator
+from langchain_core.messages import BaseMessage
 
 # 1. ПОЛНЫЙ ПРОФИЛЬ КАНДИДАТА (10+ полей из твоего списка)
 class CandidateProfile(TypedDict):
@@ -58,4 +59,5 @@ class AgentState(TypedDict):
     next_step: str                 
     error: Optional[str]    
            
-    messages: Annotated[List[str], operator.add]
+    # messages: Annotated[List[str], operator.add]
+    messages: Annotated[Sequence[BaseMessage], operator.add]

@@ -1,89 +1,59 @@
 import os
-from groq import Groq
+from langchain_groq import ChatGroq
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from app.agents.state import AgentState
+from app.agents.career_tools import career_tools_list 
 
-# Инициализация клиента (можно вынести в отдельный конфиг)
-client = Groq(
-    api_key=os.getenv("GROQ_API_KEY"),
-    timeout=60.0, 
-    max_retries=3
-              )
-
-SUMMARY_PROMPT = """
-Ты — главный аналитик карьерного центра. Твоя задача: дать краткий вердикт по текущему состоянию кандидата.
-Если есть PostgresSQL или MySQL, то значит кандидат знает SQL. Не нужно это отражать. По похожим ситуациям также.
-
-ВХОДНЫЕ ДАННЫЕ:
-- Кандидат: {name}, Специализация: {spec}, Опыт: {experience_years}
-- Навыки: {skills}
-- Совпадение с рынком (Match Score): {match_score}%
-- Топ вакансия: {top_vacancy_name} от {company}
-
-ТВОЙ ОТВЕТ (Markdown):
-### 📊 Общий вердикт
-Коротко (2-3 предложения): насколько кандидат конкурентоспособен.
-- **Сильные стороны**: перечисли 3 главных технических скилла из его стека.
-- **Главный барьер**: один ключевой навык, которого не хватает для топ-вакансии.
-- **Рыночная позиция**: "В рынке" / "Выше рынка" / "Нужно подтянуться".
-"""
+# Инициализация
+# llm = ChatGroq(model="llama-3.3-70b-versatile", temperature=0.2)
+llm = ChatGroq(model="llama-3.1-8b-instant", temperature=0.2)
+llm_with_tools = llm.bind_tools(career_tools_list)
 
 def summary_node(state: AgentState):
-    print("\n--- [DEBUG] Проверка содержимого State ---")
-    print(f"Ключи в стейте: {list(state.keys())}")
+    print("\n--- [START] SUMMARY: Processing Messages ---")
     
-    # Проверяем конкретные важные поля
-    has_candidate = "candidate" in state and bool(state["candidate"])
-    has_market = "market" in state and bool(state["market"])
+    messages = state.get("messages", [])
     
-    print(f"Наличие данных кандидата: {has_candidate}")
-    print(f"Наличие данных рынка: {has_market}")
-    
-    if has_market:
-        print(f"Найдено вакансий в market: {len(state['market'].get('top_vacancies', []))}")
-    # ------------------------------------------
-    print("\n--- [START] STRATEGY: Generating Career Advice ---")
-    
-    market = state.get("market", {})
-    candidate = state.get("candidate", {})
-    
-    # ПРОВЕРКА: Если данных нет в state, берем их принудительно (для теста)
-    if not market.get("top_vacancies"):
-        print("⚠️ ВНИМАНИЕ: Данные рынка пусты в state!")
+    # ПРОВЕРКА НА ЦИКЛ: Если последнее сообщение уже от AI (и без вызова тулз), выходим.
+    if messages and isinstance(messages[-1], AIMessage) and not messages[-1].tool_calls:
+        return {}
 
-    # Формируем контекст максимально явно
-    full_context = f"""
-    КАНДИДАТ: {candidate.get('name', 'Не указано')} ({candidate.get('experience_years', 0.5)})
-    ЕГО НАВЫКИ: {candidate.get('skills', [])}
-    ЖЕЛАЕМАЯ З/П: {candidate.get('desired_salary', 'Не указана')}
+    # Проверяем, был ли уже ответ от ассистента в истории
+    has_ai_reply = any(isinstance(m, AIMessage) for m in messages)
     
-    АНАЛИТИКА РЫНКА:
-    - Match Score: {market.get('match_score', 0)}%
-    - Медиана рынка: {market.get('salary_median', 0)}
-    - Пробелы (Gaps): {market.get('skill_gaps', [])}
-    
-    ТОП ВАКАНСИЙ ИЗ БАЗЫ:
-    {market.get('top_vacancies', [])}
-    """
+    # 1. ПЕРВЫЙ ЗАПУСК (Формируем отчет)
+    if not has_ai_reply:
+        candidate = state.get("candidate", {})
+        market = state.get("market", {})
+        
+        report = f"""
+✅ **Резюме проанализировано!**
+Кандидат: {candidate.get('name', 'Кандидат')} | Опыт: {candidate.get('experience_years', 0)} лет.
+Match Score: {market.get('match_score', 0)}%
 
-    try:
-        response = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            messages=[
-                {"role": "system", "content": SUMMARY_PROMPT},
-                {"role": "user", "content": f"Проанализируй эти данные и резюме по кандидату:\n{full_context}"}
-            ],
-            temperature=0.3
-        )
-        
-        advice = response.choices[0].message.content
-        
-        # Сохраняем совет в сообщения или отдельное поле состояния
+🔍 **Топ вакансии:**
+"""
+        for v in market.get('top_vacancies', [])[:3]:
+            report += f"- {v['title']} в {v['company']} ({v['match_score']}%)\n"
+
+        # Возвращаем AIMessage в список сообщений
         return {
-            "summary": advice,
-            "messages": [advice],
-            "next_step": "end"
+            "summary": report,
+            "messages": [AIMessage(content=report)]
         }
-        
-    except Exception as e:
-        print(f"Ошибка в Summary Node: {e}")
-        return {"error": str(e), "next_step": "end"}
+
+    # 2. ДИАЛОГ В ЧАТЕ
+    system_prompt = SystemMessage(content=f"""
+    Ты экспертный карьерный ассистент. 
+    Данные кандидата: {state.get('candidate')}
+    Данные рынка: {state.get('market')}
+    
+    Если пользователь просит 'роадмап' — ОБЯЗАТЕЛЬНО вызывай инструмент generate_roadmap.
+    """)
+    
+    # Вызываем модель
+    response = llm_with_tools.invoke([system_prompt] + messages)
+
+    return {
+        "messages": [response]
+    }
