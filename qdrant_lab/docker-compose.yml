@@ -1,0 +1,9 @@
+services:
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: qdrant_db
+    # Это ключевая строка, которая лечит твою ошибку:
+    network_mode: "host" 
+    volumes:
+      - ./qdrant_storage:/qdrant/storage
+    restart: always

@@ -37,19 +37,25 @@ class MarketContext(TypedDict):
 
 # 3. ГЛОБАЛЬНОЕ СОСТОЯНИЕ ГРАФА
 class AgentState(TypedDict):
-    # Входные данные (сырые)
-    raw_file_content: bytes        # Содержимое PDF/Docx
+# Входные данные
+    raw_file_content: bytes
     file_name: str
     
-    # 1. Профиль (заполняется узлом Ingestion)
+    # Основные структуры
     candidate: CandidateProfile
-    
-    # 2. Рыночный срез (заполняется узлом Analysis через Qdrant)
     market: MarketContext
     
-    # Управление логикой
-    next_step: str                 # "analysis", "salary_calc", "strategy", "end"
-    error: Optional[str]           # Сюда пишем ошибки, если LLM или Qdrant упали
+    # Текстовый обзор (Summary)
+    summary: Optional[str]         
     
-    # Накопительный список логов и инсайтов
+    # Данные сервисов
+    user_input: Optional[str]      
+    roadmap: Optional[str]         
+    tailored_resume: Optional[str] 
+    interview_questions: Optional[str] 
+    
+    # Логика графа
+    next_step: str                 
+    error: Optional[str]    
+           
     messages: Annotated[List[str], operator.add]
