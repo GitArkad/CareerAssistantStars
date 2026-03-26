@@ -24,9 +24,10 @@ x-airflow-common: &airflow-common
     AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: "true"
     AIRFLOW_CONFIG: /opt/airflow/config/airflow.cfg
     EMAIL_YOUR: ${EMAIL_YOUR}
-    ADZUNA_APP_ID: ${ADZUNA_APP_ID_YOUR}
-    ADZUNA_APP_KEY: ${ADZUNA_APP_KEY_YOUR}
-    USAJOBS_API_KEY: ${USAJOBS_API_KEY_YOUR}
+    ADZUNA_APP_ID: ${ADZUNA_APP_ID}
+    ADZUNA_APP_KEY: ${ADZUNA_APP_KEY}
+    USAJOBS_API_KEY: ${USAJOBS_API_KEY}
+    USAJOBS_EMAIL: ${USAJOBS_EMAIL}
     PYTHONPATH: /opt/airflow/project
 
     POSTGRES_DB: ${POSTGRES_DB}
@@ -41,10 +42,10 @@ x-airflow-common: &airflow-common
     REDIS_HOST: ${REDIS_HOST}
     REDIS_PORT: ${REDIS_PORT}
 
-    S3_ENDPOINT: ${S3_ENDPOINT}
+    S3_BUCKET: ${S3_BUCKET}
+    S3_ENDPOINT_URL: ${S3_ENDPOINT_URL}
     S3_ACCESS_KEY: ${S3_ACCESS_KEY}
     S3_SECRET_KEY: ${S3_SECRET_KEY}
-    S3_BUCKET_RAW: ${S3_BUCKET_RAW}
     S3_BUCKET_RESUMES: ${S3_BUCKET_RESUMES}
     S3_BUCKET_REPORTS: ${S3_BUCKET_REPORTS}
 
@@ -60,6 +61,9 @@ x-airflow-common: &airflow-common
     - ./airflow/plugins:/opt/airflow/plugins
     - ./airflow/scripts:/opt/airflow/scripts
     - ./airflow/output_global:/opt/airflow/output_global
+    - ./src:/opt/airflow/project/src
+    - ./backend:/opt/airflow/project/backend
+    - ./db:/opt/airflow/project/db 
   user: "${AIRFLOW_UID}:0"
   depends_on: &airflow-common-depends-on
     redis:
@@ -108,7 +112,7 @@ services:
     entrypoint: >
       /bin/sh -c "
       mc alias set local http://minio:9000 ${MINIO_ROOT_USER} ${MINIO_ROOT_PASSWORD};
-      mc mb -p local/${S3_BUCKET_RAW} || true;
+      mc mb -p local/${S3_BUCKET} || true;
       mc mb -p local/${S3_BUCKET_RESUMES} || true;
       mc mb -p local/${S3_BUCKET_REPORTS} || true;
       exit 0;
@@ -130,6 +134,7 @@ services:
       - "5433:5432"
     volumes:
       - project-postgres-data:/var/lib/postgresql/data
+      - ./db/init:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD", "pg_isready", "-U", "${POSTGRES_USER}", "-d", "${POSTGRES_DB}"]
       interval: 10s
@@ -194,10 +199,10 @@ services:
       REDIS_HOST: ${REDIS_HOST}
       REDIS_PORT: ${REDIS_PORT}
 
-      S3_ENDPOINT: ${S3_ENDPOINT}
+      S3_BUCKET: ${S3_BUCKET}
+      S3_ENDPOINT_URL: ${S3_ENDPOINT_URL}
       S3_ACCESS_KEY: ${S3_ACCESS_KEY}
       S3_SECRET_KEY: ${S3_SECRET_KEY}
-      S3_BUCKET_RAW: ${S3_BUCKET_RAW}
       S3_BUCKET_RESUMES: ${S3_BUCKET_RESUMES}
       S3_BUCKET_REPORTS: ${S3_BUCKET_REPORTS}
 
@@ -209,6 +214,8 @@ services:
     ports:
       - "8000:8000"
     volumes:
+      - ./backend:/app/backend
+      - ./db:/app/db
       - backend-cache:/app/cache
     depends_on:
       project-postgres:
@@ -217,6 +224,8 @@ services:
         condition: service_started
       minio:
         condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
     restart: unless-stopped
@@ -393,9 +402,10 @@ services:
       _AIRFLOW_WWW_USER_USERNAME: ${_AIRFLOW_WWW_USER_USERNAME}
       _AIRFLOW_WWW_USER_PASSWORD: ${_AIRFLOW_WWW_USER_PASSWORD}
       EMAIL_YOUR: ${EMAIL_YOUR}
-      ADZUNA_APP_ID: ${ADZUNA_APP_ID_YOUR}
-      ADZUNA_APP_KEY: ${ADZUNA_APP_KEY_YOUR}
-      USAJOBS_API_KEY: ${USAJOBS_API_KEY_YOUR}
+      ADZUNA_APP_ID: ${ADZUNA_APP_ID}
+      ADZUNA_APP_KEY: ${ADZUNA_APP_KEY}
+      USAJOBS_API_KEY: ${USAJOBS_API_KEY}
+      USAJOBS_EMAIL: ${USAJOBS_EMAIL}
       PYTHONPATH: /opt/airflow/project
     user: "0:0"
     networks:
