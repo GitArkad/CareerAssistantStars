@@ -1,29 +1,7 @@
 """
 data_cleaner.py
 
-Full cleaning, enrichment, and normalization pipeline.
-
-What it does:
-1.  Deduplication (url, job_id)
-2.  Text cleaning (HTML, whitespace)
-3.  SKILL EXTRACTION FROM DESCRIPTION — the main fix
-4.  Salary parsing from description text (£45,000-£55,000 → salary_from/to)
-5.  Currency detection from description (£ → GBP, not USD)
-6.  Salary range splitting ("50000-70000" in one field → two fields)
-7.  Seniority detection from title + description
-8.  Remote type detection
-9.  Country/city normalization
-10. Skill normalization via synonym map
-11. Employment type normalization
-12. Build unified output for embeddings/models
-
-Output columns (unified table):
-    job_id, title, title_normalized, description, requirements,
-    company_name, salary_from, salary_to, currency, salary_period,
-    seniority_normalized, years_experience_min, years_experience_max,
-    skills (list), tools (list), methodologies (list),
-    location, country, city, remote, remote_type, employment_type,
-    source, url, search_query, published_at, parsed_at
+Полный пайплайн очистки, нормализации и enrichment вакансий.
 """
 
 from __future__ import annotations
@@ -39,11 +17,7 @@ import pandas as pd
 
 logger = logging.getLogger(__name__)
 
-# ============================================================================
-# SKILL EXTRACTION — comprehensive keyword list
-# ============================================================================
-
-# Skills to search for in description text (lowercased for matching)
+# Справочник извлекаемых навыков из текста вакансии.
 EXTRACTABLE_SKILLS = {
     # Languages
     "python", "java", "javascript", "typescript", "scala", "go", "golang",
@@ -99,10 +73,10 @@ EXTRACTABLE_SKILLS = {
     "microservices", "tdd", "bdd", "soa",
 }
 
-# Patterns that need word-boundary matching (avoid false positives)
-# "r" alone matches too many things, "go" matches "going", etc.
+# Для этих навыков используем строгий word-boundary match.
 EXACT_MATCH_SKILLS = {"go", "c#", "c++", "rust", "dart", "ray", "dask", "helm", "vault", "feast", "ruby"}
 
+# Контекстные паттерны для языка R, чтобы не ловить ложные совпадения.
 R_LANGUAGE_CONTEXT_PATTERNS = [
     r"\br\s*(?:language|lang)\b",
     r"\br\s+(?:programming|studio|shiny|markdown|package|cran|tidyverse|ggplot|dplyr)\b",
@@ -114,7 +88,7 @@ R_LANGUAGE_CONTEXT_PATTERNS = [
     r"\b(?:programming\s+in|experience\s+with|knowledge\s+of|proficiency\s+in)\s+r\b",
 ]
 
-# Skills that are tools (subset)
+# Подмножество навыков, которые считаем tools.
 TOOLS_SET = {
     "git", "jira", "confluence", "docker", "kubernetes", "jenkins",
     "gitlab ci", "github actions", "slack", "notion", "figma", "postman",
@@ -122,6 +96,7 @@ TOOLS_SET = {
     "swagger", "sentry", "pagerduty",
 }
 
+# Подмножество навыков, которые считаем methodologies.
 METHODOLOGIES_SET = {
     "agile", "scrum", "kanban", "devops", "mlops", "ci/cd",
     "microservices", "tdd", "bdd", "soa",
@@ -129,7 +104,7 @@ METHODOLOGIES_SET = {
 
 
 def extract_skills_from_text(text: str) -> List[str]:
-    """Extract ALL skills from any text (description, requirements, etc.)."""
+    """Извлекает навыки из текста вакансии."""
     if not text:
         return []
     t = text.lower()
@@ -137,15 +112,13 @@ def extract_skills_from_text(text: str) -> List[str]:
 
     for skill in EXTRACTABLE_SKILLS:
         if skill in EXACT_MATCH_SKILLS:
-            # Exact word boundary match
             if re.search(rf"\b{re.escape(skill)}\b", t):
                 found.add(skill)
         else:
-            # Substring is fine for multi-word skills and most tech terms
             if skill in t:
                 found.add(skill)
 
-    # Special cases
+    # Спец-обработчики для частых вариантов написания.
     if re.search(r"\bc\+\+\b", t):
         found.add("c++")
     if re.search(r"\bc#\b", t):
@@ -168,8 +141,8 @@ def extract_skills_from_text(text: str) -> List[str]:
         found.add("ci/cd")
     if any(re.search(pattern, t) for pattern in R_LANGUAGE_CONTEXT_PATTERNS):
         found.add("r")
-    # Uppercase R detection — catches R in comma/slash-separated skill lists
-    # Uses original case `text` because \bR\b must match uppercase only
+
+    # Отдельная обработка uppercase R в списках навыков.
     if re.search(
         r"(?:"
         r"\bR\b\s*(?:[,/;]|and\b|or\b|\+)"
@@ -183,11 +156,7 @@ def extract_skills_from_text(text: str) -> List[str]:
 
     return sorted(found)
 
-
-# ============================================================================
-# SKILL NORMALIZATION (synonym map)
-# ============================================================================
-
+# Карта синонимов навыков -> каноническое имя.
 SKILL_SYNONYMS = {
     "python": "Python", "py": "Python", "python3": "Python",
     "java": "Java", "javascript": "JavaScript", "js": "JavaScript",
@@ -249,7 +218,7 @@ SKILL_SYNONYMS = {
 
 
 def normalize_skills(raw_skills: List[str]) -> List[str]:
-    """Normalize skill names to canonical form."""
+    """Нормализует навыки к каноническим именам."""
     normalized = set()
     for skill in raw_skills:
         key = skill.lower().strip()
@@ -258,30 +227,26 @@ def normalize_skills(raw_skills: List[str]) -> List[str]:
     return sorted(normalized)
 
 
-# ============================================================================
-# SALARY PARSING FROM DESCRIPTION
-# ============================================================================
-
-# Currency symbols → code
+# Символы валют -> код.
 CURRENCY_SYMBOLS = {
     "£": "GBP", "€": "EUR", "$": "USD", "₽": "RUB",
     "₹": "INR", "zł": "PLN", "₴": "UAH", "₸": "KZT",
     "a$": "AUD", "c$": "CAD", "s$": "SGD",
 }
 
-# Currency words → code
+# Слова валют -> код.
 CURRENCY_WORDS = {
     "gbp": "GBP", "eur": "EUR", "usd": "USD", "rub": "RUB",
     "rur": "RUB", "руб": "RUB", "рублей": "RUB",
     "pln": "PLN", "uah": "UAH", "kzt": "KZT",
     "cad": "CAD", "aud": "AUD", "inr": "INR", "sgd": "SGD",
     "chf": "CHF", "sek": "SEK", "nok": "NOK", "dkk": "DKK",
-    "per annum": None, "p.a.": None, "pa": None,  # period markers, not currency
+    "per annum": None, "p.a.": None, "pa": None,  
 }
 
 
 def _parse_number(s: str) -> Optional[float]:
-    """Parse a number string like '45,000' or '45000' or '45k'."""
+    """Парсит 45,000 / 45k / 45000 в число."""
     s = s.strip().replace(",", "").replace(" ", "")
     if s.lower().endswith("k"):
         try:
@@ -295,22 +260,11 @@ def _parse_number(s: str) -> Optional[float]:
 
 
 def extract_salary_from_text(text: str) -> Tuple[Optional[float], Optional[float], Optional[str], Optional[str]]:
-    """
-    Parse salary range and currency from description text.
-    Returns (salary_from, salary_to, currency, period).
-
-    Handles:
-    - £45,000 - £55,000
-    - $120k-$150k
-    - 50000-70000 EUR
-    - от 300000 до 500000 руб
-    - Competitive salary between £45,000 and £50,000
-    - €3,500/month
-    """
+    """Извлекает salary_from, salary_to, currency, period из текста."""
     if not text:
         return None, None, None, None
 
-    # Detect period
+    # Определяем период оплаты.
     period = None
     text_lower = text.lower()
     if any(w in text_lower for w in ["/month", "per month", "в месяц", "monthly", "/mo"]):
@@ -341,16 +295,16 @@ def extract_salary_from_text(text: str) -> Tuple[Optional[float], Optional[float
             continue
         groups = m.groups()
 
+        # Формат: symbol + min + max.
         if len(groups) == 3 and groups[0] in CURRENCY_SYMBOLS:
-            # Pattern: symbol, min, max
             currency = CURRENCY_SYMBOLS.get(groups[0], "USD")
             sal_min = _parse_number(groups[1])
             sal_max = _parse_number(groups[2])
             if sal_min and sal_max:
                 return sal_min, sal_max, currency, period
 
+        # Формат: min + max + currency word.
         elif len(groups) == 3 and groups[0] not in CURRENCY_SYMBOLS:
-            # Pattern: min, max, currency_word
             sal_min = _parse_number(groups[0])
             sal_max = _parse_number(groups[1])
             cur_word = (groups[2] or "").lower().strip()
@@ -358,8 +312,8 @@ def extract_salary_from_text(text: str) -> Tuple[Optional[float], Optional[float
             if sal_min and sal_max and currency:
                 return sal_min, sal_max, currency, period
 
+        # Формат: одно значение или диапазон без явной валюты.
         elif len(groups) == 2:
-            # Single value
             if groups[0] in CURRENCY_SYMBOLS:
                 currency = CURRENCY_SYMBOLS[groups[0]]
                 sal = _parse_number(groups[1])
@@ -375,24 +329,18 @@ def extract_salary_from_text(text: str) -> Tuple[Optional[float], Optional[float
 
 
 def detect_currency_from_text(text: str) -> Optional[str]:
-    """Detect currency from any text by looking for symbols and codes."""
+    """Определяет валюту из текста по символам и кодам."""
     if not text:
         return None
-    # Check symbols first (most reliable)
     for sym, code in CURRENCY_SYMBOLS.items():
         if sym in text:
             return code
-    # Check currency codes
     for word, code in CURRENCY_WORDS.items():
         if code and re.search(rf"\b{re.escape(word)}\b", text.lower()):
             return code
     return None
 
-
-# ============================================================================
-# SENIORITY DETECTION
-# ============================================================================
-
+# Карта seniority -> normalized level.
 SENIORITY_MAP = {
     "intern": "intern", "trainee": "intern", "стажер": "intern", "стажёр": "intern",
     "junior": "junior", "jr ": "junior", "jr.": "junior", "entry level": "junior",
@@ -410,8 +358,7 @@ SENIORITY_MAP = {
 
 
 def detect_seniority(title: str = "", description: str = "", experience: str = "") -> str:
-    """Detect seniority from multiple fields."""
-    # Priority: experience_level → title → description
+    """Определяет seniority из experience/title/description."""
     for text in [experience, title, description[:300]]:
         if not text:
             continue
@@ -421,11 +368,7 @@ def detect_seniority(title: str = "", description: str = "", experience: str = "
                 return level
     return "unknown"
 
-
-# ============================================================================
-# EMPLOYMENT TYPE NORMALIZATION
-# ============================================================================
-
+#  Нормализует employment_type
 def normalize_employment_type(val: str, description: str = "") -> str:
     if not val and not description:
         return "unknown"
@@ -442,11 +385,7 @@ def normalize_employment_type(val: str, description: str = "") -> str:
         return "internship"
     return val or "unknown"
 
-
-# ============================================================================
-# REMOTE TYPE DETECTION
-# ============================================================================
-
+#  Определяет remote / hybrid / onsite
 def detect_remote_type(title: str = "", description: str = "", remote_flag=None) -> str:
     text = f"{title or ''} {(description or '')[:500]}".lower()
     if any(w in text for w in ["hybrid", "гибрид", "гибридн", "2-3 days in office", "2 days in office"]):
@@ -459,11 +398,7 @@ def detect_remote_type(title: str = "", description: str = "", remote_flag=None)
         return "onsite"
     return "unknown"
 
-
-# ============================================================================
-# HELPERS
-# ============================================================================
-
+# Помощники
 def _parse_pg_array(val) -> List[str]:
     if isinstance(val, list):
         return [str(x).strip() for x in val if str(x).strip()]
@@ -499,7 +434,7 @@ def _parse_pg_array(val) -> List[str]:
 
 
 def _to_pg_array(items: List[str]) -> str:
-    """Serialize lists as JSON text for CSV snapshots; loader converts them back to Python lists."""
+    """Сериализует list как JSON string для snapshot/CSV"""
     clean = [str(x).strip() for x in items if str(x).strip()]
     return json.dumps(clean, ensure_ascii=False)
 
@@ -514,11 +449,9 @@ def normalize_title(title: str) -> Optional[str]:
 
 
 def extract_city_from_location(location: str) -> Optional[str]:
-    """Extract city name from location string."""
+    """Берёт city как первую часть location"""
     if not location:
         return None
-    # "London, UK" → "London"
-    # "San Francisco, CA" → "San Francisco"
     parts = location.split(",")
     return parts[0].strip() if parts else None
 
@@ -538,22 +471,14 @@ def _extract_years_from_text(text: str) -> Tuple[Optional[int], Optional[int]]:
             return (int(g[0]), int(g[1])) if len(g) == 2 else (int(g[0]), int(g[0]))
     return None, None
 
-
-# ============================================================================
-# MAIN CLEANING PIPELINE
-# ============================================================================
-
+#  ГЛАВНЫЙ CLEANING PIPELINE
 def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Full cleaning + enrichment pipeline.
-    Input: raw merged DataFrame from all parsers.
-    Output: clean, enriched DataFrame ready for Postgres + Qdrant.
-    """
     initial = len(df)
     logger.info(f"Cleaning: {initial} rows")
     df = df.copy()
 
-    # ── 1. Dedup ──
+    # Строим единый dedupe key с приоритетом:
+    # source_job_id -> url -> job_id -> source+company+title
     def _dedupe_key(row):
         source = str(row.get("source") or "")
         source_job_id = str(row.get("source_job_id") or "").strip()
@@ -572,12 +497,11 @@ def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     df["_dedupe_key"] = df.apply(_dedupe_key, axis=1)
     df = df.drop_duplicates(subset=["_dedupe_key"], keep="first")
 
-    # ── 2. Drop empty titles ──
     if "title" in df.columns:
         df = df.dropna(subset=["title"])
         df = df[df["title"].astype(str).str.strip() != ""]
 
-    # ── 3. Text cleaning ──
+    # Базовая очистка текстовых полей
     for col in ["title", "description", "company_name", "requirements",
                  "responsibilities", "nice_to_have"]:
         if col in df.columns:
@@ -587,7 +511,7 @@ def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
                 .replace({"nan": None, "None": None, "": None})
             )
 
-    # ── 4. EXTRACT SKILLS FROM DESCRIPTION + TITLE + REQUIREMENTS ──
+    # Извлекаем навыки из всех основных текстовых полей
     logger.info("Extracting skills from text fields...")
 
     def _extract_all_skills(row):
@@ -602,8 +526,7 @@ def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
 
     df["_all_skills"] = df.apply(_extract_all_skills, axis=1)
 
-    # Merge extracted text skills with source-provided key_skills.
-    # Cleaner is the single source of truth for skills_extracted/tools/methodologies.
+    # Мержим извлечённые skills с key_skills и legacy skills_extracted
     if "key_skills" in df.columns:
         df["_key_skills"] = df["key_skills"].apply(_parse_pg_array)
     else:
@@ -619,7 +542,6 @@ def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
         axis=1,
     )
 
-    # Separate into skills, tools, methodologies
     df["skills_extracted"] = df["_merged_skills"].apply(
         lambda s: _to_pg_array(sorted(set(s))))
     df["tools"] = df["_merged_skills"].apply(
@@ -630,11 +552,10 @@ def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
 
     df.drop(columns=["_all_skills", "_key_skills", "_legacy_skills", "_merged_skills"], inplace=True)
 
-    # ── 5. SKILL NORMALIZATION ──
     df["skills_normalized"] = df["skills_extracted"].apply(
         lambda s: _to_pg_array(normalize_skills(_parse_pg_array(s))))
 
-    # ── 6. SALARY: parse from description if missing ──
+    # Если salary пустая или валюта подозрительная, пробуем восстановить из description
     logger.info("Parsing salaries from descriptions...")
 
     def _fix_salary(row):
@@ -643,13 +564,10 @@ def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
         currency = row.get("currency")
         desc = str(row.get("description") or "")
 
-        # Try to detect real currency from description (override wrong USD)
         desc_currency = detect_currency_from_text(desc)
         if desc_currency and (not currency or currency == "USD"):
-            # If API said USD but description has £ → it's GBP
             currency = desc_currency
 
-        # If salary fields are empty, try parsing from description
         if pd.isna(sal_from) and pd.isna(sal_to):
             parsed_from, parsed_to, parsed_cur, parsed_period = extract_salary_from_text(desc)
             if parsed_from:
@@ -659,7 +577,7 @@ def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
             if parsed_cur:
                 currency = parsed_cur
 
-        # Handle single-column salary ("50000-70000" as string in salary_from)
+        # Разбиваем диапазон, если он пришёл строкой в salary_from
         if isinstance(sal_from, str) and "-" in sal_from:
             parts = sal_from.split("-")
             if len(parts) == 2:
@@ -680,20 +598,18 @@ def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     df["salary_to"] = salary_fixed["salary_to"]
     df["currency"] = salary_fixed["currency"]
 
-    # Drop invalid salary ranges (from > to)
+    # Если диапазон salary перевёрнут, меняем местами, а не выкидываем строку
     mask_bad = (
         df["salary_from"].notna() & df["salary_to"].notna()
         & (df["salary_from"] > df["salary_to"])
     )
     if mask_bad.any():
-        # Swap instead of drop — might just be reversed
         swap_mask = mask_bad
         df.loc[swap_mask, ["salary_from", "salary_to"]] = (
             df.loc[swap_mask, ["salary_to", "salary_from"]].values
         )
         logger.info(f"Swapped {swap_mask.sum()} reversed salary ranges")
 
-    # ── 7. SENIORITY ──
     df["seniority_normalized"] = df.apply(
         lambda r: detect_seniority(
             str(r.get("title") or ""),
@@ -701,9 +617,8 @@ def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
             str(r.get("experience_level") or ""),
         ), axis=1)
 
-    # ── 8. YEARS EXPERIENCE ──
+    # Извлекаем years_experience_min/max
     def _get_years(row):
-        # Try experience_level first, then description
         for col in ["experience_level", "description"]:
             v = str(row.get(col) or "")
             y1, y2 = _extract_years_from_text(v)
@@ -715,17 +630,16 @@ def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     df["years_experience_min"] = years["years_experience_min"]
     df["years_experience_max"] = years["years_experience_max"]
 
-    # ── 9. COUNTRY / CITY ──
+    # Извлекаем years_experience_min/max
     if "country" in df.columns:
         df["country"] = df["country"].astype(str).str.strip().str.upper().replace({"NAN": None, "NONE": None})
     if "location" in df.columns:
         df["city"] = df["location"].apply(extract_city_from_location)
 
-    # ── 10. TITLE NORMALIZED ──
+    # Нормализуем title для downstream агрегаций
     if "title" in df.columns:
         df["title_normalized"] = df["title"].apply(normalize_title)
 
-    # ── 11. REMOTE TYPE ──
     df["remote_type"] = df.apply(
         lambda r: detect_remote_type(
             str(r.get("title") or ""),
@@ -734,7 +648,7 @@ def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
         ), axis=1)
     df["remote"] = df["remote_type"].isin(["remote", "hybrid"])
 
-    # ── 12. EMPLOYMENT TYPE ──
+    # Нормализуем employment_type
     if "employment_type" in df.columns:
         df["employment_type"] = df.apply(
             lambda r: normalize_employment_type(
@@ -742,12 +656,12 @@ def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
                 str(r.get("description") or ""),
             ), axis=1)
 
-    # ── 13. KEY SKILLS as pg array ──
+    # Приводим key_skills к единому формату
     if "key_skills" in df.columns:
         df["key_skills"] = df["key_skills"].apply(
             lambda x: _to_pg_array(_parse_pg_array(x)))
 
-    # ── 14. VISA SPONSORSHIP (extract from description) ──
+    # Извлекаем признак visa_sponsorship
     def _detect_visa(row):
         if row.get("visa_sponsorship") in (True, False):
             return row["visa_sponsorship"]
@@ -759,7 +673,7 @@ def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
         return None
     df["visa_sponsorship"] = df.apply(_detect_visa, axis=1)
 
-    # ── 15. RELOCATION (extract from description) ──
+    # Извлекает признак relocation.
     def _detect_reloc(row):
         if row.get("relocation") in (True, False):
             return row["relocation"]
@@ -769,7 +683,7 @@ def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
         return None
     df["relocation"] = df.apply(_detect_reloc, axis=1)
 
-    # ── 16. SPOKEN LANGUAGES (extract from description) ──
+    # Словарь ключевых языков для spoken_languages.
     _LANG_KW = {
         "English": ["english", "английск"],
         "German": ["german", "deutsch", "немецк"],
@@ -790,7 +704,7 @@ def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
         return _to_pg_array(found) if found else "[]"
     df["spoken_languages"] = df.apply(_detect_langs, axis=1)
 
-    # ── 17. SALARY PERIOD (detect from description) ──
+    # Извлекает salary_period, если он не пришёл из источника
     def _detect_period(row):
         if row.get("salary_period") and str(row["salary_period"]).lower() not in ("nan", "none", "", "null"):
             return row["salary_period"]
@@ -804,11 +718,6 @@ def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
         return None
     df["salary_period"] = df.apply(_detect_period, axis=1)
 
-    # ══════════════════════════════════════════════════════════
-    # 18-23. DERIVED / COMPUTED FIELDS
-    # ══════════════════════════════════════════════════════════
-
-    # ── 18. ROLE FAMILY ──
     _ROLE_FAMILIES = {
         "data_scientist": ["data scientist", "дата сайентист", "ученый по данным"],
         "ml_engineer": ["machine learning", "ml engineer", "deep learning", "ai engineer"],
@@ -845,7 +754,7 @@ def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
 
     df["role_family"] = df["title"].apply(_detect_role_family)
 
-    # ── 19. BOOLEAN FLAGS (super useful for filtering) ──
+    # Набор boolean-флагов для быстрых фильтров 
     df["is_data_role"] = df["role_family"].isin([
         "data_scientist", "data_engineer", "data_analyst", "data_architect",
         "ml_engineer", "mlops_engineer", "nlp_engineer", "cv_engineer", "researcher"])
@@ -857,7 +766,7 @@ def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
                   or "python" in str(r.get("title") or "").lower(), axis=1)
     df["is_analyst_role"] = df["role_family"].isin(["data_analyst"])
 
-    # ── 20. COUNTRY NORMALIZED (standardize country names) ──
+    # Нормализация названий стран к единому виду
     _COUNTRY_MAP = {
         "РОССИЯ": "Russia", "UNITED KINGDOM": "United Kingdom", "UK": "United Kingdom",
         "GERMANY": "Germany", "FRANCE": "France", "NETHERLANDS": "Netherlands",
@@ -877,10 +786,6 @@ def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     logger.info(f"Cleaning done: {len(df)} rows (dropped {initial - len(df)})")
     return df
 
-
-# ============================================================================
-# S3 STEP
-# ============================================================================
 
 def _merge_dedupe_key(row) -> str:
     source = str(row.get("source") or "")
@@ -925,9 +830,17 @@ def _merge_cleaned_with_latest(old_latest: pd.DataFrame, cleaned_new: pd.DataFra
 
 def run_clean_step(date_str: str = None, raw_s3_keys: list[str] | None = None) -> str:
     """
-    AIRFLOW TASK 2:
-    download only current run raw snapshots -> clean -> merge with latest history
-    -> upload dated clean snapshot + latest pointer.
+    Airflow task helper для cleaning step.
+
+    Порядок:
+    1. Определить raw keys текущего запуска.
+    2. Скачать raw CSV из S3/MinIO.
+    3. Склеить их в единый DataFrame.
+    4. Прогнать через clean_dataframe().
+    5. Слить с предыдущим latest clean snapshot.
+    6. Загрузить dated clean snapshot и latest pointer обратно в S3/MinIO.
+
+    Возвращает ключ clean snapshot в S3/MinIO.
     """
     from src.loaders.s3_storage import (
         clean_key,

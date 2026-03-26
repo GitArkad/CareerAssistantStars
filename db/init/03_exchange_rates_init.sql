@@ -1,18 +1,7 @@
--- =========================================================
--- exchange_rates_init.sql
---
--- Run AFTER init.sql. Creates:
--- 1. exchange_rates table (daily currency pairs)
--- 2. convert_salary() function (any-to-any conversion)
--- 3. v_salary_converted view (jobs with converted salaries)
--- =========================================================
-
 BEGIN;
 
--- =========================================================
--- 1. EXCHANGE RATES TABLE
--- =========================================================
-
+-- Создаёт таблицу дневных курсов валют.
+-- Храним пары base -> target на конкретную дату.
 CREATE TABLE IF NOT EXISTS exchange_rates (
     id BIGSERIAL,
     rate_date DATE NOT NULL,
@@ -24,25 +13,22 @@ CREATE TABLE IF NOT EXISTS exchange_rates (
     PRIMARY KEY (rate_date, base_currency, target_currency)
 );
 
+-- Индекс для выборки последних курсов по дате.
 CREATE INDEX IF NOT EXISTS idx_exchange_rates_date
     ON exchange_rates (rate_date DESC);
 
+-- Индекс для поиска по валютной паре.
 CREATE INDEX IF NOT EXISTS idx_exchange_rates_pair
     ON exchange_rates (base_currency, target_currency);
 
+-- Индекс для частых запросов по целевой валюте.
 CREATE INDEX IF NOT EXISTS idx_exchange_rates_target
     ON exchange_rates (target_currency, rate_date DESC);
 
--- =========================================================
--- 2. CONVERSION FUNCTION
---
--- Usage:
---   SELECT convert_salary(50000, 'GBP', 'USD');           -- latest rate
---   SELECT convert_salary(50000, 'GBP', 'USD', '2025-01-15');  -- historical
---
--- Returns NULL if rate not found or amount is NULL.
--- =========================================================
 
+-- Универсальная конвертация суммы из одной валюты в другую.
+-- Если target_date задана, берётся ближайший курс на или до этой даты.
+-- Если валюты одинаковые, сумма возвращается без изменений.
 CREATE OR REPLACE FUNCTION convert_salary(
     amount NUMERIC,
     from_currency TEXT,
@@ -58,14 +44,11 @@ BEGIN
         RETURN NULL;
     END IF;
 
-    -- Same currency: no conversion needed
     IF UPPER(from_currency) = UPPER(to_currency) THEN
         RETURN amount;
     END IF;
 
-    -- Use provided date or find the latest available
     IF target_date IS NOT NULL THEN
-        -- Find the closest rate on or before the target date
         SELECT er.rate, er.rate_date INTO conversion_rate, lookup_date
         FROM exchange_rates er
         WHERE er.base_currency = UPPER(from_currency)
@@ -74,7 +57,6 @@ BEGIN
         ORDER BY er.rate_date DESC
         LIMIT 1;
     ELSE
-        -- Latest available rate
         SELECT er.rate INTO conversion_rate
         FROM exchange_rates er
         WHERE er.base_currency = UPPER(from_currency)
@@ -92,16 +74,8 @@ END;
 $$ LANGUAGE plpgsql STABLE;
 
 
--- =========================================================
--- 3. VIEW: Salary converted to a chosen currency
---
--- To use:
---   SELECT * FROM v_salary_converted('USD');
---
--- Since views can't take parameters, we use a function
--- that returns a table.
--- =========================================================
-
+-- Возвращает вакансии с зарплатой, пересчитанной в выбранную валюту.
+-- Это функция, а не VIEW, потому что нужен параметр target.
 CREATE OR REPLACE FUNCTION v_salary_converted(target TEXT DEFAULT 'USD')
 RETURNS TABLE (
     job_id TEXT,
@@ -135,6 +109,8 @@ BEGIN
         UPPER(target) AS target_currency,
         convert_salary(jc.salary_from::numeric, jc.currency, target) AS salary_from_converted,
         convert_salary(jc.salary_to::numeric, jc.currency, target) AS salary_to_converted,
+  
+        -- midpoint считается даже если заполнена только одна граница.
         ROUND((
             COALESCE(
                 convert_salary(jc.salary_from::numeric, jc.currency, target),
@@ -145,6 +121,8 @@ BEGIN
                 convert_salary(jc.salary_from::numeric, jc.currency, target)
             )
         ) / 2.0, 2) AS salary_mid_converted,
+
+        -- Подтягиваем последний доступный курс для пары.
         er.rate AS exchange_rate,
         er.rate_date
     FROM jobs_curated jc
@@ -161,16 +139,8 @@ END;
 $$ LANGUAGE plpgsql STABLE;
 
 
--- =========================================================
--- 4. QUICK VIEWS: USD, EUR, RUB
---
--- One view per target currency for fast dashboard queries.
---   SELECT * FROM v_salary_usd WHERE country = 'UNITED KINGDOM';
---   SELECT * FROM v_salary_eur WHERE seniority_normalized = 'senior';
---   SELECT * FROM v_salary_rub WHERE source = 'hh.ru';
--- =========================================================
-
--- Helper to avoid repeating the same SELECT for each currency
+-- Хелпер для фиксированных витрин по валютам.
+-- Нужен, чтобы не дублировать один и тот же SELECT для USD/EUR/RUB.
 CREATE OR REPLACE FUNCTION _salary_view_query(target TEXT)
 RETURNS TABLE (
     job_id TEXT,
@@ -205,6 +175,8 @@ BEGIN
         jc.salary_to AS salary_to_original,
         convert_salary(jc.salary_from::numeric, jc.currency, target) AS salary_from_converted,
         convert_salary(jc.salary_to::numeric, jc.currency, target) AS salary_to_converted,
+                
+        -- midpoint в целевой валюте.
         ROUND((
             COALESCE(
                 convert_salary(jc.salary_from::numeric, jc.currency, target),
@@ -221,7 +193,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql STABLE;
 
-
+-- Готовые витрины под частые запросы / дашборды.
 CREATE OR REPLACE VIEW v_salary_usd AS
     SELECT * FROM _salary_view_query('USD');
 

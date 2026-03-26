@@ -1,8 +1,7 @@
 """
 aggregate.py
 
-AIRFLOW TASK 4: Refresh views and compute market aggregates.
-Runs after data is loaded into PostgreSQL.
+AIRFLOW TASK 4: пересчёт агрегатов рынка после загрузки вакансий в PostgreSQL.
 """
 
 from __future__ import annotations
@@ -17,13 +16,8 @@ SENIORITY_SENTINEL = "unknown"
 
 def run_aggregate_step() -> dict:
     """
-    Refresh market_skill_stats, salary_aggregates, market_role_stats
-    from jobs_curated.
-
-    Notes:
-    - NULL/blank country and seniority are coalesced to sentinel values before upsert,
-      so UNIQUE/ON CONFLICT works deterministically.
-    - Salary averages are converted before aggregation, so mixed currencies are not averaged together.
+    Обновляет market_skill_stats, salary_aggregates, market_role_stats
+    на основе jobs_curated.
     """
     from src.loaders.db_loader import get_connection
 
@@ -38,9 +32,12 @@ def run_aggregate_step() -> dict:
         conn = get_connection()
         cur = conn.cursor()
 
-        # =========================================================
-        # 1. Market skill stats
-        # =========================================================
+        ###########################################################
+        # Агрегаты по навыкам
+        ###########################################################
+        # Для каждой группы role/country/seniority:
+        # - считаем долю вакансий с конкретным skill;
+        # - считаем среднюю зарплату по skill в USD
         cur.execute(
             """
             WITH job_skill_rows AS (
@@ -117,9 +114,11 @@ def run_aggregate_step() -> dict:
         summary["skill_stats_updated"] = cur.rowcount
         logger.info("Skill stats: %s rows upserted", cur.rowcount)
 
-        # =========================================================
-        # 2. Salary aggregates (computed in USD, EUR, RUB)
-        # =========================================================
+        ###########################################################
+        # Агрегаты зарплат
+        ###########################################################
+        # Считаем percentiles и средние отдельно по USD / EUR / RUB.
+        # Внутри одной агрегации валюты не смешиваются.
         total_salary_rows = 0
         for target_cur in ("USD", "EUR", "RUB"):
             cur.execute(
@@ -206,9 +205,15 @@ def run_aggregate_step() -> dict:
         summary["salary_aggregates_updated"] = total_salary_rows
         logger.info("Salary aggregates total: %s rows upserted", total_salary_rows)
 
-        # =========================================================
-        # 3. Market role stats
-        # =========================================================
+        ###########################################################
+        # Агрегаты по ролям
+        ###########################################################
+        # Для каждой группы role/country/seniority:
+        # - считаем total_jobs;
+        # - средний опыт;
+        # - долю remote;
+        # - среднюю зарплату в USD;
+        # - условный уровень competition.
         cur.execute(
             """
             INSERT INTO market_role_stats (

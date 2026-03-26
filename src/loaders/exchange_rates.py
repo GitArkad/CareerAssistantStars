@@ -1,31 +1,15 @@
 """
 exchange_rates.py
 
-Fetches daily exchange rates from official sources and stores them in PostgreSQL.
+Обновление официальных курсов валют для нормализации зарплат.
+Источники:
+- ECB
+- Банк России (CBR)
 
-Sources:
-- ECB Data Portal API: primary source for standard EUR reference rates
-- Bank of Russia XML: official supplement for RUB and currencies not covered by ECB in this pipeline
-
-Table: exchange_rates
-- rate_date       DATE
-- base_currency   TEXT
-- target_currency TEXT
-- rate            NUMERIC
-
-Pipeline:
-1. Resolve one common official date on or before the requested date
-2. Load EUR-based rates from ECB for supported currencies
-3. Supplement missing pipeline currencies from the Bank of Russia daily XML
-4. Compute all cross-rates
-5. Upsert into exchange_rates
-
-Usage in Airflow:
-    from src.loaders.exchange_rates import run_update_rates
-    run_update_rates()  # uses today's date, falls back to latest common official date
-
-Usage in SQL:
-    SELECT * FROM exchange_rates WHERE rate_date = CURRENT_DATE;
+Результат:
+- расчёт EUR-базовых курсов
+- построение cross-rates
+- upsert в exchange_rates
 """
 
 from __future__ import annotations
@@ -42,21 +26,21 @@ import requests
 
 logger = logging.getLogger(__name__)
 
-# Target display currencies
+# Валюты, которые должны поддерживаться в отображении.
 TARGET_CURRENCIES = ["USD", "EUR", "RUB"]
 
-# Source currencies present in job data
+# Валюты, встречающиеся в исходных данных вакансий.
 SOURCE_CURRENCIES = ["GBP", "KZT", "PLN", "UAH", "CAD", "AUD", "INR", "SGD", "BYN"]
 
 PIPELINE_CURRENCIES = sorted(set(TARGET_CURRENCIES + SOURCE_CURRENCIES))
 PIPELINE_NON_EUR = sorted(c for c in PIPELINE_CURRENCIES if c != "EUR")
 
-# Official APIs
+# Официальные API.
 ECB_API_BASE_URL = "https://data-api.ecb.europa.eu/service/data/EXR"
 CBR_DAILY_URL = "https://www.cbr.ru/scripts/XML_daily_eng.asp"
 
-# ECB is the primary source only for currencies we expect it to publish reliably in this pipeline.
-# The remaining pipeline currencies are supplemented from the Bank of Russia daily XML.
+# Валюты, которые считаются основными для загрузки из ECB.
+# Остальные дополняются из CBR.
 ECB_DAILY_CURRENCIES = {
     "USD",
     "GBP",
@@ -71,9 +55,9 @@ LOOKBACK_DAYS = 10
 REQUEST_TIMEOUT = 20
 
 
-# =========================================================
-# Utilities
-# =========================================================
+###########################################################
+# Вспомогательные функции
+###########################################################
 
 def _parse_iso_date(value: str) -> date:
     return datetime.strptime(value, "%Y-%m-%d").date()
@@ -91,9 +75,9 @@ def _ecb_requested_currencies() -> list[str]:
     return [c for c in PIPELINE_NON_EUR if c in ECB_DAILY_CURRENCIES]
 
 
-# =========================================================
+###########################################################
 # ECB
-# =========================================================
+###########################################################
 
 def _build_ecb_series_key(currencies: list[str]) -> str:
     if not currencies:
@@ -103,9 +87,8 @@ def _build_ecb_series_key(currencies: list[str]) -> str:
 
 @lru_cache(maxsize=128)
 def _fetch_ecb_window(start_period: str, end_period: str) -> list[dict[str, str]]:
-    """
-    Fetch a date window from the official ECB API as CSV rows.
-    """
+ # Загружаем окно дат из ECB одним запросом.
+
     requested = _ecb_requested_currencies()
     series_key = _build_ecb_series_key(requested)
     url = f"{ECB_API_BASE_URL}/{series_key}"
@@ -132,10 +115,8 @@ def _fetch_ecb_window(start_period: str, end_period: str) -> list[dict[str, str]
 
 
 def _build_ecb_by_date(rows: list[dict[str, str]]) -> dict[str, dict[str, float]]:
-    """
-    Build: {"YYYY-MM-DD": {"USD": 1.08, "GBP": 0.86, ...}}
-    using only complete dates for the ECB-configured currencies.
-    """
+    # Собираем курсы по датам и оставляем только полные даты.
+
     requested = _ecb_requested_currencies()
     by_date: dict[str, dict[str, float]] = {}
 
@@ -165,18 +146,13 @@ def _build_ecb_by_date(rows: list[dict[str, str]]) -> dict[str, dict[str, float]
     return complete_only
 
 
-# =========================================================
+###########################################################
 # Bank of Russia (CBR)
-# =========================================================
+###########################################################
 
 def _parse_cbr_document(xml_text: str) -> tuple[str, dict[str, float]]:
-    """
-    Parse Bank of Russia daily XML.
+    # Парсим XML CBR в словарь RUB-based курсов.
 
-    Returns:
-        actual_date: YYYY-MM-DD
-        rub_rates: {"USD": rub_per_1_usd, "EUR": rub_per_1_eur, ... , "RUB": 1.0}
-    """
     root = ET.fromstring(xml_text)
 
     raw_date = (root.attrib.get("Date") or "").strip()
@@ -216,10 +192,8 @@ def _parse_cbr_document(xml_text: str) -> tuple[str, dict[str, float]]:
 
 @lru_cache(maxsize=128)
 def _fetch_cbr_for_requested_date(requested_date: str) -> tuple[str, dict[str, float]]:
-    """
-    Request the official Bank of Russia daily XML for a date.
-    Note: for non-business days, the document may carry the latest registered date.
-    """
+    # Загружаем ежедневный XML CBR за указанную дату.
+
     resp = requests.get(
         CBR_DAILY_URL,
         params={"date_req": _to_cbr_date(requested_date)},
@@ -230,19 +204,13 @@ def _fetch_cbr_for_requested_date(requested_date: str) -> tuple[str, dict[str, f
     return _parse_cbr_document(resp.text)
 
 
-# =========================================================
-# Source resolution
-# =========================================================
+###########################################################
+# Сведение источников
+###########################################################
 
 def _compose_eur_rates_for_date(candidate_date: str, ecb_by_date: dict[str, dict[str, float]]) -> tuple[dict[str, float], dict]:
-    """
-    Compose one EUR-based rate table for one exact common official date.
+# Собираем единый набор EUR-based курсов для одной общей официальной даты.
 
-    Rules:
-    - ECB provides primary EUR-based rates for configured currencies.
-    - CBR provides RUB directly as EUR->RUB, and supplements missing pipeline currencies
-      by converting their RUB-based quotations into EUR-based quotations using the same CBR date.
-    """
     if candidate_date not in ecb_by_date:
         raise ValueError(f"ECB has no complete observation for {candidate_date}")
 
@@ -255,7 +223,7 @@ def _compose_eur_rates_for_date(candidate_date: str, ecb_by_date: dict[str, dict
     eur_rates = dict(ecb_by_date[candidate_date])
     eur_rub = cbr_rub_rates["EUR"]
 
-    # Direct EUR->RUB rate.
+    # Прямой курс EUR -> RUB.
     eur_rates["RUB"] = eur_rub
 
     supplemented_from_cbr: list[str] = []
@@ -266,8 +234,7 @@ def _compose_eur_rates_for_date(candidate_date: str, ecb_by_date: dict[str, dict
         if cur not in cbr_rub_rates:
             continue
 
-        # CBR provides RUB per 1 unit of currency.
-        # Convert to foreign-currency-units per 1 EUR.
+        # Достраиваем недостающие валюты через RUB-базу CBR.
         eur_rates[cur] = eur_rub / cbr_rub_rates[cur]
         supplemented_from_cbr.append(cur)
 
@@ -284,10 +251,8 @@ def _compose_eur_rates_for_date(candidate_date: str, ecb_by_date: dict[str, dict
 
 
 def fetch_official_rates(rate_date: Optional[str] = None) -> tuple[dict[str, float], str, dict]:
-    """
-    Resolve one common official date on or before rate_date (or today)
-    and return EUR-based rates for all available pipeline currencies.
-    """
+    # Ищем ближайшую общую официальную дату на или до requested date.
+
     as_of_date = _pick_as_of_date(rate_date)
     start_period = (as_of_date - timedelta(days=LOOKBACK_DAYS)).isoformat()
     end_period = as_of_date.isoformat()
@@ -323,17 +288,13 @@ def fetch_official_rates(rate_date: Optional[str] = None) -> tuple[dict[str, flo
     )
 
 
-# =========================================================
-# Compute cross-rates
-# =========================================================
+###########################################################
+# Расчёт cross-rates
+###########################################################
 
 def compute_cross_rates(eur_rates: dict[str, float]) -> list[dict]:
-    """
-    From EUR-based rates, compute all cross-rate pairs.
-    Example:
-        if EUR/USD=1.08 and EUR/GBP=0.86,
-        then GBP/USD = 1.08 / 0.86 = 1.2558
-    """
+# Строим все пары base_currency -> target_currency из EUR-базы.
+
     full_rates = {"EUR": 1.0, **eur_rates}
     records: list[dict] = []
 
@@ -355,11 +316,13 @@ def compute_cross_rates(eur_rates: dict[str, float]) -> list[dict]:
     return records
 
 
-# =========================================================
-# Store in Postgres
-# =========================================================
+###########################################################
+# Запись в Postgres
+###########################################################
 
 def _get_connection():
+    # Поддерживаем импорт как из src, так и из локального запуска.
+
     try:
         from src.loaders.db_loader import get_connection
     except ImportError:
@@ -369,9 +332,8 @@ def _get_connection():
 
 
 def upsert_rates(rate_date: str, records: list[dict]) -> None:
-    """
-    Upsert exchange rates into exchange_rates.
-    """
+    # Записываем курсы в exchange_rates через upsert.
+
     from psycopg2.extras import execute_batch
 
     conn = _get_connection()
@@ -397,20 +359,13 @@ def upsert_rates(rate_date: str, records: list[dict]) -> None:
     logger.info("Upserted %d exchange-rate rows for %s", len(rows), rate_date)
 
 
-# =========================================================
-# Main pipeline step
-# =========================================================
+###########################################################
+# Основной шаг пайплайна
+###########################################################
 
 def run_update_rates(rate_date: Optional[str] = None) -> dict:
-    """
-    Airflow entrypoint.
+# Основной entrypoint для Airflow.
 
-    Behavior:
-    - Takes the requested date from Airflow (context['ds']) or today's date if omitted.
-    - Resolves the latest common official date on or before that date.
-    - Loads official rates automatically.
-    - Computes cross-rates and writes them to Postgres.
-    """
     eur_rates, actual_date, meta = fetch_official_rates(rate_date)
     cross_rates = compute_cross_rates(eur_rates)
     upsert_rates(actual_date, cross_rates)
@@ -430,9 +385,8 @@ def run_update_rates(rate_date: Optional[str] = None) -> dict:
 
 
 def backfill_rates(start_date: str, end_date: Optional[str] = None) -> None:
-    """
-    Backfill historical rates using the latest common official date on or before each day.
-    """
+    # Историческая дозагрузка курсов по диапазону дат.
+    
     start = _parse_iso_date(start_date)
     end = _parse_iso_date(end_date) if end_date else date.today()
 

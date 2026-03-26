@@ -12,6 +12,7 @@ import logging
 import os
 import re
 import time
+import warnings
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -21,7 +22,7 @@ from src.loaders.s3_storage import ensure_bucket, make_run_id, raw_key, upload_d
 
 import pandas as pd
 import requests
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, MarkupResemblesLocatorWarning
 
 from src.parsers.search_queries import get_queries_for_source
 
@@ -95,10 +96,23 @@ def _jid(src: str, source_job_id: Optional[str], url: Optional[str], title: Opti
 def _html(text: Optional[str]) -> str:
     if not text:
         return ""
-    s = BeautifulSoup(text, "html.parser")
-    for x in s(["script", "style"]):
+
+    s = str(text).strip()
+    if not s:
+        return ""
+
+    # Если это обычный текст без HTML-тегов — не гоняем через BeautifulSoup
+    if "<" not in s and ">" not in s:
+        return re.sub(r"\s+", " ", s).strip()
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", MarkupResemblesLocatorWarning)
+        soup = BeautifulSoup(s, "html.parser")
+
+    for x in soup(["script", "style"]):
         x.decompose()
-    return re.sub(r"\s+", " ", s.get_text(" ", strip=True)).strip()
+
+    return re.sub(r"\s+", " ", soup.get_text(" ", strip=True)).strip()
 
 
 def _match_token(text: str, token: str) -> bool:
@@ -146,6 +160,20 @@ def _jsonable(value: Any) -> Any:
         return value
     return str(value)
 
+def _normalize_text(value: Optional[str]) -> str:
+    return (value or "").strip().lower()
+
+
+def _matches_query(text: str, query: str) -> bool:
+    return _normalize_text(query) in _normalize_text(text)
+
+
+def _first_matching_query(title: Optional[str], description: Optional[str], queries: list[str]) -> Optional[str]:
+    haystack = f"{title or ''} {description or ''}".lower()
+    for q in queries:
+        if q.lower() in haystack:
+            return q
+    return None
 
 class BaseParser(ABC):
     def __init__(self, src: str):
@@ -230,6 +258,19 @@ class BaseParser(ABC):
             self.vacancies.append(record)
             self.collected_ids.add(job_id)
 
+    def to_df(self) -> pd.DataFrame:
+        if not self.vacancies:
+            return pd.DataFrame()
+        df = pd.DataFrame(self.vacancies)
+        list_cols = ["key_skills", "skills_extracted", "skills_normalized", "tech_stack_tags", "tools", "methodologies", "spoken_languages"]
+        for col in list_cols:
+            if col in df.columns:
+                df[col] = df[col].apply(lambda x: json.dumps(x, ensure_ascii=False) if isinstance(x, list) else x)
+        if "raw_json" in df.columns:
+            df["raw_json"] = df["raw_json"].apply(lambda x: json.dumps(x, ensure_ascii=False, default=str) if isinstance(x, (dict, list)) else x)
+        return df
+
+class QueryParserBase(BaseParser, ABC):
     @abstractmethod
     def fetch(self, keyword: str, target: int, **kwargs) -> List[Dict]:
         raise NotImplementedError
@@ -251,20 +292,55 @@ class BaseParser(ABC):
             time.sleep(0.25)
         logger.info("[%s] Done: %s", self.source_name, len(self.vacancies))
 
-    def to_df(self) -> pd.DataFrame:
-        if not self.vacancies:
-            return pd.DataFrame()
-        df = pd.DataFrame(self.vacancies)
-        list_cols = ["key_skills", "skills_extracted", "skills_normalized", "tech_stack_tags", "tools", "methodologies", "spoken_languages"]
-        for col in list_cols:
-            if col in df.columns:
-                df[col] = df[col].apply(lambda x: json.dumps(x, ensure_ascii=False) if isinstance(x, list) else x)
-        if "raw_json" in df.columns:
-            df["raw_json"] = df["raw_json"].apply(lambda x: json.dumps(x, ensure_ascii=False, default=str) if isinstance(x, (dict, list)) else x)
-        return df
 
+class CatalogParserBase(BaseParser, ABC):
+    def __init__(self, src: str):
+        super().__init__(src)
+        self._catalog_cache = None
 
-class HHParser(BaseParser):
+    @abstractmethod
+    def load_catalog_once(self) -> list[dict]:
+        raise NotImplementedError
+
+    @abstractmethod
+    def raw_to_record(self, raw_job: dict, matched_query: Optional[str]) -> Optional[dict]:
+        raise NotImplementedError
+
+    def run(self, keywords=None, target=MAX_TOTAL_PER_SOURCE):
+        keywords = keywords or get_queries_for_source(self.source_name)
+        logger.info("[%s] catalog-mode, %s queries", self.source_name, len(keywords))
+
+        catalog = self.load_catalog_once()
+        if not catalog:
+            logger.info("[%s] empty catalog", self.source_name)
+            return
+
+        for raw_job in catalog:
+            if len(self.vacancies) >= target:
+                break
+
+            title = raw_job.get("title") or raw_job.get("text") or ""
+            description = (
+                raw_job.get("description")
+                or raw_job.get("content")
+                or raw_job.get("descriptionPlain")
+                or ""
+            )
+
+            matched_query = _first_matching_query(title, description, keywords)
+            if not matched_query:
+                continue
+
+            try:
+                record = self.raw_to_record(raw_job, matched_query)
+                if record:
+                    self._add(record)
+            except Exception as e:
+                logger.warning("[%s] raw_to_record failed: %s", self.source_name, e)
+
+        logger.info("[%s] Done: %s", self.source_name, len(self.vacancies))
+
+class HHParser(QueryParserBase):
     def __init__(self):
         super().__init__("hh.ru")
         self._hh_ids = set()
@@ -363,13 +439,14 @@ class HHParser(BaseParser):
         return res
 
 
-class AdzunaParser(BaseParser):
+class AdzunaParser(QueryParserBase):
     def __init__(self, app_id, app_key):
         super().__init__("adzuna.com")
         self.app_id = app_id
         self.app_key = app_key
         self.max_rate_limit_retries = int(os.getenv("ADZUNA_MAX_RATE_RETRIES", "6"))
         self.base_sleep_seconds = int(os.getenv("ADZUNA_RATE_SLEEP_SECONDS", "10"))
+        self.auth_failed = False
 
     def _is_rate_limited(self, response: requests.Response) -> bool:
         if response.status_code == 429:
@@ -388,11 +465,14 @@ class AdzunaParser(BaseParser):
         ])
 
     def fetch(self, keyword, target, **kwargs):
+        if self.auth_failed:
+            return []
+
         res = []
         per_country_target = max(1, target // len(ADZUNA_C))
 
         for country_code, country_name, default_currency in ADZUNA_C:
-            if len(res) >= target:
+            if len(res) >= target or self.auth_failed:
                 break
 
             page = 1
@@ -416,6 +496,14 @@ class AdzunaParser(BaseParser):
                 except requests.RequestException as e:
                     logger.warning("[adzuna.com] %s %s page=%s request failed: %s", country_code, keyword, page, e)
                     break
+
+                if r.status_code == 401:
+                    self.auth_failed = True
+                    logger.error(
+                        "[adzuna.com] HTTP 401 Unauthorized. Stop source immediately. "
+                        "Check ADZUNA_APP_ID / ADZUNA_APP_KEY."
+                    )
+                    return res
 
                 if self._is_rate_limited(r):
                     rate_limit_hits += 1
@@ -487,7 +575,7 @@ class AdzunaParser(BaseParser):
         return res
 
 
-class USAJobsParser(BaseParser):
+class USAJobsParser(QueryParserBase):
     def __init__(self, api_key, email):
         super().__init__("usajobs.gov")
         self.headers.update({"Host": "data.usajobs.gov", "User-Agent": email, "Authorization-Key": api_key})
@@ -528,42 +616,106 @@ class USAJobsParser(BaseParser):
         return res
 
 
-class HimalayasParser(BaseParser):
+class HimalayasParser(CatalogParserBase):
     def __init__(self):
         super().__init__("himalayas.app")
+        self.page_size = int(os.getenv("HIMALAYAS_PAGE_SIZE", "20"))
+        self.max_retries = int(os.getenv("HIMALAYAS_MAX_RETRIES", "2"))
+        self.retry_sleep = float(os.getenv("HIMALAYAS_RETRY_SLEEP", "2"))
+        self.page_sleep = float(os.getenv("HIMALAYAS_PAGE_SLEEP", "0.4"))
 
-    def fetch(self, keyword, target, **kwargs):
-        res = []
+    def load_catalog_once(self):
+        if self._catalog_cache is not None:
+            return self._catalog_cache
+
+        logger.info("[himalayas.app] loading catalog once for this run")
+        jobs_all = []
         offset = 0
-        while len(res) < target:
-            r = requests.get("https://himalayas.app/jobs/api", params={"offset": offset, "limit": 20}, headers=self.headers, timeout=REQUEST_TIMEOUT)
-            if r.status_code != 200:
-                break
-            data = r.json()
-            jobs = data if isinstance(data, list) else data.get("jobs", [])
+
+        while True:
+            success = False
+
+            for attempt in range(1, self.max_retries + 2):
+                try:
+                    r = requests.get(
+                        "https://himalayas.app/jobs/api",
+                        params={"offset": offset, "limit": self.page_size},
+                        headers=self.headers,
+                        timeout=REQUEST_TIMEOUT,
+                    )
+
+                    if r.status_code != 200:
+                        logger.warning("[himalayas.app] HTTP %s at offset=%s", r.status_code, offset)
+                        self._catalog_cache = jobs_all
+                        return self._catalog_cache
+
+                    data = r.json()
+                    jobs = data if isinstance(data, list) else data.get("jobs", [])
+                    success = True
+                    break
+
+                except requests.exceptions.Timeout:
+                    logger.warning(
+                        "[himalayas.app] timeout at offset=%s retry=%s/%s",
+                        offset, attempt, self.max_retries + 1
+                    )
+                    if attempt <= self.max_retries:
+                        time.sleep(self.retry_sleep)
+                    else:
+                        logger.warning(
+                            "[himalayas.app] giving up at offset=%s, keep already fetched jobs=%s",
+                            offset, len(jobs_all)
+                        )
+                        self._catalog_cache = jobs_all
+                        return self._catalog_cache
+
+                except requests.RequestException as e:
+                    logger.warning("[himalayas.app] request failed at offset=%s err=%s", offset, e)
+                    self._catalog_cache = jobs_all
+                    return self._catalog_cache
+
+            if not success:
+                self._catalog_cache = jobs_all
+                return self._catalog_cache
+
             if not jobs:
                 break
-            for j in jobs:
-                title = j.get("title", "")
-                if keyword.lower() not in title.lower():
-                    continue
-                if len(res) >= target:
-                    break
-                res.append(self._rec(
-                    source_job_id=str(j.get("id") or j.get("slug") or ""),
-                    title=title, description=j.get("description"), company_name=j.get("companyName"),
-                    salary_from=j.get("minSalary"), salary_to=j.get("maxSalary"), currency=j.get("salaryCurrency", "USD"),
-                    location=j.get("location"), country=j.get("country"), remote=True, remote_type="remote",
-                    employment_type=j.get("employmentType"), published_at=j.get("pubDate"), url=j.get("url"), search_query=keyword, raw_json=j,
-                ))
-            offset += 20
-            if len(jobs) < 20:
+
+            jobs_all.extend(jobs)
+
+            if len(jobs) < self.page_size:
                 break
-            time.sleep(0.4)
-        return res
+
+            offset += self.page_size
+            time.sleep(self.page_sleep)
+
+        logger.info("[himalayas.app] catalog loaded: %s jobs", len(jobs_all))
+        self._catalog_cache = jobs_all
+        return self._catalog_cache
+
+    def raw_to_record(self, j: dict, matched_query: Optional[str]) -> Optional[dict]:
+        title = j.get("title", "")
+        return self._rec(
+            source_job_id=str(j.get("id") or j.get("slug") or ""),
+            title=title,
+            description=j.get("description"),
+            company_name=j.get("companyName"),
+            salary_from=j.get("minSalary"),
+            salary_to=j.get("maxSalary"),
+            currency=j.get("salaryCurrency", "USD"),
+            location=j.get("location"),
+            country=j.get("country"),
+            remote=True,
+            remote_type="remote",
+            employment_type=j.get("employmentType"),
+            published_at=j.get("pubDate"),
+            url=j.get("url"),
+            search_query=matched_query,
+            raw_json=j,
+        )
 
 
-class ArbeitnowParser(BaseParser):
+class ArbeitnowParser(QueryParserBase):
     def __init__(self):
         super().__init__("arbeitnow.com")
 
@@ -598,97 +750,142 @@ class ArbeitnowParser(BaseParser):
         return res
 
 
-class GreenhouseParser(BaseParser):
+class GreenhouseParser(CatalogParserBase):
     def __init__(self):
         super().__init__("greenhouse.com")
 
-    def fetch(self, keyword, target, **kwargs):
-        res = []
-        kl = keyword.lower()
+    def load_catalog_once(self):
+        if self._catalog_cache is not None:
+            return self._catalog_cache
+
+        logger.info("[greenhouse.com] loading catalog once for this run")
+        jobs_all = []
+
         for company in get_active_companies("greenhouse"):
-            if len(res) >= target:
-                break
             try:
-                r = requests.get(f"https://boards-api.greenhouse.io/v1/boards/{company}/jobs", params={"content": "true"}, headers=self.headers, timeout=REQUEST_TIMEOUT)
+                r = requests.get(
+                    f"https://boards-api.greenhouse.io/v1/boards/{company}/jobs",
+                    params={"content": "true"},
+                    headers=self.headers,
+                    timeout=REQUEST_TIMEOUT,
+                )
+
                 if r.status_code == 404:
                     mark_inactive("greenhouse", company, "404")
                     continue
+
                 if r.status_code != 200:
                     mark_inactive("greenhouse", company, f"HTTP {r.status_code}")
                     continue
+
                 jobs = r.json().get("jobs", [])
                 if not jobs:
                     reset_fail_count("greenhouse", company)
                     continue
+
                 reset_fail_count("greenhouse", company)
+
                 for j in jobs:
-                    title = j.get("title", "")
-                    if kl not in title.lower():
-                        continue
-                    if len(res) >= target:
-                        break
-                    loc = self._sd(j.get("location"))
-                    departments = self._sl(j.get("departments"))
-                    first_dept = self._sd(departments[0]) if departments else {}
-                    res.append(self._rec(
-                        source_job_id=str(j.get("id") or ""),
-                        title=title, description=j.get("content"), company_name=company,
-                        department=first_dept.get("name"),
-                        location=loc.get("name"), published_at=j.get("updated_at"), url=j.get("absolute_url"), search_query=keyword, raw_json=j,
-                    ))
+                    j["_company"] = company
+                    jobs_all.append(j)
+
                 time.sleep(0.3)
+
             except requests.exceptions.Timeout:
                 mark_inactive("greenhouse", company, "timeout")
             except Exception as e:
                 logger.warning("GH %s: %s", company, e)
                 mark_inactive("greenhouse", company, str(e)[:100])
-        return res
+
+        logger.info("[greenhouse.com] catalog loaded: %s jobs", len(jobs_all))
+        self._catalog_cache = jobs_all
+        return self._catalog_cache
+
+    def raw_to_record(self, j: dict, matched_query: Optional[str]) -> Optional[dict]:
+        loc = self._sd(j.get("location"))
+        departments = self._sl(j.get("departments"))
+        first_dept = self._sd(departments[0]) if departments else {}
+
+        return self._rec(
+            source_job_id=str(j.get("id") or ""),
+            title=j.get("title"),
+            description=j.get("content"),
+            company_name=j.get("_company"),
+            department=first_dept.get("name"),
+            location=loc.get("name"),
+            published_at=j.get("updated_at"),
+            url=j.get("absolute_url"),
+            search_query=matched_query,
+            raw_json=j,
+        )
 
 
-class LeverParser(BaseParser):
+class LeverParser(CatalogParserBase):
     def __init__(self):
         super().__init__("lever.co")
 
-    def fetch(self, keyword, target, **kwargs):
-        res = []
-        kl = keyword.lower()
+    def load_catalog_once(self):
+        if self._catalog_cache is not None:
+            return self._catalog_cache
+
+        logger.info("[lever.co] loading catalog once for this run")
+        jobs_all = []
+
         for company in get_active_companies("lever"):
-            if len(res) >= target:
-                break
             try:
-                r = requests.get(f"https://api.lever.co/v0/postings/{company}", params={"mode": "json"}, headers=self.headers, timeout=REQUEST_TIMEOUT)
+                r = requests.get(
+                    f"https://api.lever.co/v0/postings/{company}",
+                    params={"mode": "json"},
+                    headers=self.headers,
+                    timeout=REQUEST_TIMEOUT,
+                )
+
                 if r.status_code == 404:
                     mark_inactive("lever", company, "404")
                     continue
+
                 if r.status_code != 200:
                     mark_inactive("lever", company, f"HTTP {r.status_code}")
                     continue
-                jobs = r.json() if isinstance(r.json(), list) else []
+
+                payload = r.json()
+                jobs = payload if isinstance(payload, list) else []
                 reset_fail_count("lever", company)
+
                 for j in jobs:
-                    title = j.get("text", "")
-                    if kl not in title.lower():
-                        continue
-                    if len(res) >= target:
-                        break
-                    cats = self._sd(j.get("categories"))
-                    desc = j.get("descriptionPlain") or j.get("description") or ""
-                    res.append(self._rec(
-                        source_job_id=str(j.get("id") or ""),
-                        title=title, description=desc, company_name=company,
-                        location=cats.get("location"), employment_type=cats.get("commitment"),
-                        published_at=j.get("createdAt"), url=j.get("hostedUrl"), search_query=keyword, raw_json=j,
-                    ))
+                    j["_company"] = company
+                    jobs_all.append(j)
+
                 time.sleep(0.3)
+
             except requests.exceptions.Timeout:
                 mark_inactive("lever", company, "timeout")
             except Exception as e:
                 logger.warning("Lever %s: %s", company, e)
                 mark_inactive("lever", company, str(e)[:100])
-        return res
 
+        logger.info("[lever.co] catalog loaded: %s jobs", len(jobs_all))
+        self._catalog_cache = jobs_all
+        return self._catalog_cache
 
-class AshbyParser(BaseParser):
+    def raw_to_record(self, j: dict, matched_query: Optional[str]) -> Optional[dict]:
+        cats = self._sd(j.get("categories"))
+        desc = j.get("descriptionPlain") or j.get("description") or ""
+
+        return self._rec(
+            source_job_id=str(j.get("id") or ""),
+            title=j.get("text"),
+            description=desc,
+            company_name=j.get("_company"),
+            location=cats.get("location"),
+            employment_type=cats.get("commitment"),
+            published_at=j.get("createdAt"),
+            url=j.get("hostedUrl"),
+            search_query=matched_query,
+            raw_json=j,
+        )
+
+class AshbyParser(QueryParserBase):
     def __init__(self):
         super().__init__("ashbyhq.com")
 
@@ -733,15 +930,24 @@ class AshbyParser(BaseParser):
 
 def build_parsers():
     parsers: list[BaseParser] = [HHParser()]
+
     app_id = os.getenv("ADZUNA_APP_ID")
     app_key = os.getenv("ADZUNA_APP_KEY")
     if app_id and app_key:
         parsers.append(AdzunaParser(app_id, app_key))
+
     usajobs_api_key = os.getenv("USAJOBS_API_KEY")
     usajobs_email = os.getenv("USAJOBS_EMAIL")
     if usajobs_api_key and usajobs_email:
         parsers.append(USAJobsParser(usajobs_api_key, usajobs_email))
-    parsers += [HimalayasParser(), ArbeitnowParser(), GreenhouseParser(), LeverParser(), AshbyParser()]
+
+    parsers += [
+        ArbeitnowParser(),
+        AshbyParser(),
+        GreenhouseParser(),
+        LeverParser(),
+        HimalayasParser(),
+    ]
     return parsers
 
 

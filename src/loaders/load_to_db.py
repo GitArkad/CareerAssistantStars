@@ -1,15 +1,18 @@
 """
 load_to_db.py
 
-Airflow task helper:
-- downloads the cleaned snapshot from S3/MinIO
-- converts rows into db_loader-compatible records
-- writes file-level manifest + job registry/audit + curated rows into PostgreSQL
+Airflow task helper для загрузки cleaned snapshot в PostgreSQL.
 
-Notes:
-- raw job payloads stay in S3
-- ingestion_manifest is FILE-level, not row-level
-- raw_s3_keys should be passed from task_parse for correct manifest/audit linkage
+Роль файла в пайплайне:
+- скачать cleaned snapshot из S3/MinIO
+- привести строки DataFrame к формату, который ожидает db_loader.py
+- собрать file-level manifest records
+- передать manifest + curated records в единый DB loader
+
+Важно:
+- raw payload вакансий остаётся в S3/MinIO, не переносится в PostgreSQL
+- ingestion_manifest здесь формируется на УРОВНЕ ФАЙЛОВ, а не по строкам
+- для корректной связи parse -> clean -> load желательно передавать raw_s3_keys из task_parse
 """
 
 from __future__ import annotations

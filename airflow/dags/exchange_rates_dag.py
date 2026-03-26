@@ -1,13 +1,7 @@
 """
 exchange_rates_dag.py
 
-Primary daily DAG for currency updates.
-
-Active stack:
-- exchange_rates.py
-- exchange_rates_init.sql
-
-Legacy fx_loader / fx_rates_daily_dag should be archived.
+Daily DAG for currency updates (ECB + CBR).
 """
 
 from __future__ import annotations
@@ -34,7 +28,7 @@ DEFAULT_ARGS = {
 def task_update_rates(**context) -> None:
     from src.loaders.exchange_rates import run_update_rates
 
-    date_str = context["ds"]
+    date_str = context["logical_date"].strftime("%Y-%m-%d")
     result = run_update_rates(rate_date=date_str)
     context["ti"].xcom_push(key="exchange_rates_summary", value=result)
 
@@ -52,5 +46,5 @@ with DAG(
     update_rates = PythonOperator(
         task_id="update_exchange_rates",
         python_callable=task_update_rates,
-        execution_timeout=timedelta(minutes=15),
+        execution_timeout=timedelta(minutes=35),
     )

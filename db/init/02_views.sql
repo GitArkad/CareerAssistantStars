@@ -1,8 +1,8 @@
 BEGIN;
 
--- =========================================================
--- Parsing coverage / ETL quality summary
--- =========================================================
+-- ###########################################################
+-- Аналитика по качеству парсинга и заполненности полей.
+-- ###########################################################
 CREATE OR REPLACE VIEW v_parsing_stats AS
 SELECT
     source,
@@ -28,9 +28,9 @@ SELECT
 FROM jobs_curated
 GROUP BY source, country;
 
--- =========================================================
--- Top skills overall
--- =========================================================
+-- ###########################################################
+-- Топ навыков по всей базе.
+-- ###########################################################
 CREATE OR REPLACE VIEW v_top_skills AS
 SELECT
     skill,
@@ -46,9 +46,9 @@ CROSS JOIN LATERAL unnest(skills_normalized) AS skill
 GROUP BY skill
 ORDER BY job_count DESC, skill;
 
--- =========================================================
--- Top skills by country
--- =========================================================
+-- ###########################################################
+-- Топ навыков по странам.
+-- ###########################################################
 CREATE OR REPLACE VIEW v_top_skills_by_country AS
 SELECT
     country,
@@ -60,9 +60,10 @@ WHERE country IS NOT NULL
 GROUP BY country, skill
 ORDER BY country, job_count DESC, skill;
 
--- =========================================================
--- Salary overview by country, seniority, and currency
--- =========================================================
+-- ###########################################################
+-- Сводка зарплат по стране / seniority / валюте.
+-- midpoint считается из salary_from/salary_to.
+-- ###########################################################
 CREATE OR REPLACE VIEW v_salary_overview AS
 SELECT
     country,
@@ -101,18 +102,19 @@ GROUP BY country, seniority_normalized, currency
 HAVING COUNT(*) >= 3
 ORDER BY country, seniority, currency;
 
--- =========================================================
--- Raw vs curated pipeline counts
--- =========================================================
+-- ###########################################################
+-- Быстрая сверка объёма данных по слоям.
+-- Это диагностический SELECT, не VIEW.
+-- ###########################################################
 SELECT 'ingestion_manifest' AS layer, COUNT(*) AS row_count FROM ingestion_manifest
 UNION ALL
 SELECT 'jobs_curated' AS layer, COUNT(*) AS row_count FROM jobs_curated
 UNION ALL
 SELECT 'etl_runs' AS layer, COUNT(*) AS row_count FROM etl_runs;
 
--- =========================================================
--- Data completeness by source
--- =========================================================
+-- ###########################################################
+-- Процент заполненности ключевых полей по каждому источнику.
+-- ###########################################################
 CREATE OR REPLACE VIEW v_data_quality_by_source AS
 SELECT
     source,
@@ -157,9 +159,9 @@ FROM jobs_curated
 GROUP BY source
 ORDER BY total_jobs DESC, source;
 
--- =========================================================
--- Seniority distribution
--- =========================================================
+-- ###########################################################
+-- Распределение вакансий по seniority.
+-- ###########################################################
 CREATE OR REPLACE VIEW v_seniority_distribution AS
 SELECT
     source,
@@ -170,9 +172,9 @@ FROM jobs_curated
 GROUP BY source, country, seniority_normalized
 ORDER BY source, country, job_count DESC, seniority_normalized;
 
--- =========================================================
--- Company quality / completeness
--- =========================================================
+-- ###########################################################
+-- Качество вакансий по компаниям.
+-- ###########################################################
 CREATE OR REPLACE VIEW v_company_quality AS
 SELECT
     company_name,

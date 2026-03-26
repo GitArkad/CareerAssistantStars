@@ -1,23 +1,28 @@
 BEGIN;
 
+-- Расширение для trigram-поиска по текстовым полям.
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
 
--- =========================================================
--- 1. CURATED / NORMALIZED JOBS
--- =========================================================
+###########################################################
+# 1. CURATED / NORMALIZED JOBS
+###########################################################
 
+-- Основная таблица нормализованных вакансий после очистки и enrichment.
 CREATE TABLE IF NOT EXISTS jobs_curated (
     job_id TEXT PRIMARY KEY,
 
+    -- Технические поля пайплайна и связи с файлами в S3/MinIO.
     run_id TEXT,
     raw_s3_key TEXT,
     clean_s3_key TEXT,
     content_hash TEXT,
 
+    -- Технические поля пайплайна и связи с файлами в S3/MinIO.
     source TEXT NOT NULL,
     source_job_id TEXT,
     url TEXT,
 
+    -- Основные текстовые поля вакансии.
     title TEXT,
     title_normalized TEXT,
     description TEXT,
@@ -25,21 +30,25 @@ CREATE TABLE IF NOT EXISTS jobs_curated (
     responsibilities TEXT,
     nice_to_have TEXT,
 
+   -- Исходные salary-поля до валютной нормализации.
     salary_from INTEGER,
     salary_to INTEGER,
     currency TEXT,
     salary_period TEXT,
 
+    -- Нормализованные признаки опыта и seniority.
     experience_level TEXT,
     seniority_normalized TEXT,
     years_experience_min INTEGER,
     years_experience_max INTEGER,
 
+    -- Нормализованные признаки опыта и seniority.
     company_name TEXT,
     industry TEXT,
     company_size TEXT,
     department TEXT,
 
+   -- Нормализованные навыки и технологические теги.
     key_skills TEXT[] DEFAULT '{}',
     skills_extracted TEXT[] DEFAULT '{}',
     skills_normalized TEXT[] DEFAULT '{}',
@@ -47,6 +56,7 @@ CREATE TABLE IF NOT EXISTS jobs_curated (
     tools TEXT[] DEFAULT '{}',
     methodologies TEXT[] DEFAULT '{}',
 
+   -- Нормализованные навыки и технологические теги.
     visa_sponsorship BOOLEAN DEFAULT FALSE,
     relocation BOOLEAN DEFAULT FALSE,
     benefits TEXT,
@@ -57,6 +67,7 @@ CREATE TABLE IF NOT EXISTS jobs_curated (
     security_clearance TEXT,
     role_family TEXT,
 
+    -- Нормализованные location/employment признаки.
     location TEXT,
     country TEXT,
     country_normalized TEXT,
@@ -66,21 +77,26 @@ CREATE TABLE IF NOT EXISTS jobs_curated (
     remote_type TEXT,
     employment_type TEXT,
 
+    -- Флаги для быстрых выборок по типу роли.
     is_data_role BOOLEAN DEFAULT FALSE,
     is_ml_role BOOLEAN DEFAULT FALSE,
     is_python_role BOOLEAN DEFAULT FALSE,
     is_analyst_role BOOLEAN DEFAULT FALSE,
 
+    -- Поисковый запрос, которым была получена вакансия.
     search_query TEXT,
 
+    -- Даты публикации и фактического парсинга.
     published_at TIMESTAMP NULL,
     parsed_at TIMESTAMP NULL,
 
+    -- Даты публикации и фактического парсинга.
     embedding_status TEXT DEFAULT 'pending',
 
     created_at TIMESTAMP NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
 
+    -- Базовые проверки целостности данных.
     CONSTRAINT chk_salary_range
         CHECK (
             salary_from IS NULL
@@ -111,6 +127,7 @@ CREATE TABLE IF NOT EXISTS jobs_curated (
         )
 );
 
+-- Защита от дублей по URL и source_job_id в рамках источника.
 CREATE UNIQUE INDEX IF NOT EXISTS ux_jobs_curated_source_url
     ON jobs_curated (source, url)
     WHERE url IS NOT NULL AND btrim(url) <> '';
@@ -119,6 +136,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS ux_jobs_curated_source_source_job_id
     ON jobs_curated (source, source_job_id)
     WHERE source_job_id IS NOT NULL AND btrim(source_job_id) <> '';
 
+-- Индексы для фильтрации, джойнов и служебных операций пайплайна.
 CREATE INDEX IF NOT EXISTS idx_jobs_run_id
     ON jobs_curated (run_id);
 
@@ -185,6 +203,7 @@ CREATE INDEX IF NOT EXISTS idx_jobs_source_job_id
 CREATE INDEX IF NOT EXISTS idx_jobs_embedding_status
     ON jobs_curated (embedding_status);
 
+-- Частичные индексы по булевым флагам для быстрых выборок по специальным категориям вакансий.
 CREATE INDEX IF NOT EXISTS idx_jobs_is_data_role
     ON jobs_curated (is_data_role)
     WHERE is_data_role = TRUE;
@@ -209,6 +228,7 @@ CREATE INDEX IF NOT EXISTS idx_jobs_relocation
     ON jobs_curated (relocation)
     WHERE relocation = TRUE;
 
+-- Индексы для текстового поиска и поиска по массивам.
 CREATE INDEX IF NOT EXISTS idx_jobs_title_trgm
     ON jobs_curated USING GIN (title gin_trgm_ops);
 
@@ -237,28 +257,33 @@ CREATE INDEX IF NOT EXISTS idx_jobs_spoken_languages
     ON jobs_curated USING GIN (spoken_languages);
 
 
--- =========================================================
+-- ###########################################################
 -- 2. FILE-LEVEL INGESTION MANIFEST
--- =========================================================
+-- ###########################################################
 
+-- Манифест загрузки файлов: один ряд = один обработанный файл/снимок.
 CREATE TABLE IF NOT EXISTS ingestion_manifest (
     id BIGSERIAL PRIMARY KEY,
 
+    -- Идентификаторы запуска и файловых артефактов.
     run_id TEXT NOT NULL,
     source TEXT NOT NULL,
     raw_s3_key TEXT NOT NULL,
     clean_s3_key TEXT,
     raw_file_hash TEXT,
 
+  -- Счётчики строк на разных этапах пайплайна.
     raw_row_count INTEGER,
     clean_row_count INTEGER,
     loaded_row_count INTEGER,
 
+  -- Счётчики строк на разных этапах пайплайна.
     fetched_at TIMESTAMP,
     parsed_at TIMESTAMP,
     cleaned_at TIMESTAMP,
     loaded_at TIMESTAMP,
 
+    -- Статус прохождения файла через пайплайн.
     status TEXT NOT NULL DEFAULT 'parsed',
     error_message TEXT,
     metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
@@ -270,6 +295,7 @@ CREATE TABLE IF NOT EXISTS ingestion_manifest (
         CHECK (status IN ('parsed', 'cleaned', 'loaded', 'failed', 'skipped'))
 );
 
+-- Уникальность и операционные индексы манифеста.
 CREATE UNIQUE INDEX IF NOT EXISTS ux_manifest_raw_s3_key
     ON ingestion_manifest (raw_s3_key);
 
@@ -292,21 +318,24 @@ CREATE INDEX IF NOT EXISTS idx_manifest_loaded_at
     ON ingestion_manifest (loaded_at DESC);
 
 
--- =========================================================
+-- ###########################################################
 -- 3. JOB REGISTRY + JOB AUDIT
--- =========================================================
+-- ###########################################################
 
+-- Реестр вакансий для отслеживания first_seen/last_seen и текущего состояния.
 CREATE TABLE IF NOT EXISTS job_registry (
     job_id TEXT PRIMARY KEY,
     source TEXT NOT NULL,
     source_job_id TEXT,
     url TEXT,
 
+    -- История первого и последнего появления вакансии в пайплайне.
     first_seen_run_id TEXT NOT NULL,
     last_seen_run_id TEXT NOT NULL,
     first_seen_at TIMESTAMP NOT NULL DEFAULT NOW(),
     last_seen_at TIMESTAMP NOT NULL DEFAULT NOW(),
 
+    -- История первого и последнего появления вакансии в пайплайне.
     last_raw_s3_key TEXT,
     last_clean_s3_key TEXT,
     content_hash TEXT,
@@ -316,6 +345,7 @@ CREATE TABLE IF NOT EXISTS job_registry (
     updated_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
+-- Защита от дублей в реестре по source_job_id и URL.
 CREATE UNIQUE INDEX IF NOT EXISTS ux_job_registry_source_source_job_id
     ON job_registry (source, source_job_id)
     WHERE source_job_id IS NOT NULL AND btrim(source_job_id) <> '';
@@ -333,7 +363,7 @@ CREATE INDEX IF NOT EXISTS idx_job_registry_last_seen_at
 CREATE INDEX IF NOT EXISTS idx_job_registry_content_hash
     ON job_registry (content_hash);
 
-
+-- Аудит действий по вакансии в рамках конкретного запуска.
 CREATE TABLE IF NOT EXISTS job_audit (
     id BIGSERIAL PRIMARY KEY,
     run_id TEXT NOT NULL,
@@ -346,6 +376,8 @@ CREATE TABLE IF NOT EXISTS job_audit (
     raw_s3_key TEXT,
     clean_s3_key TEXT,
     content_hash TEXT,
+
+        -- Действие пайплайна по вакансии.
     action TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'ok',
     message TEXT,
@@ -378,6 +410,7 @@ CREATE INDEX IF NOT EXISTS idx_job_audit_seen_at
 -- 4. SKILL NORMALIZATION DICTIONARY
 -- =========================================================
 
+-- Словарь синонимов навыков для приведения к canonical_name.
 CREATE TABLE IF NOT EXISTS skill_synonyms (
     synonym TEXT PRIMARY KEY,
     canonical_name TEXT NOT NULL,
@@ -391,11 +424,11 @@ CREATE INDEX IF NOT EXISTS idx_skill_synonyms_canonical
 CREATE INDEX IF NOT EXISTS idx_skill_synonyms_category
     ON skill_synonyms (category);
 
-
 -- =========================================================
 -- 5. MARKET AGGREGATES
 -- =========================================================
 
+-- Предрассчитанные агрегаты по навыкам.
 CREATE TABLE IF NOT EXISTS market_skill_stats (
     id BIGSERIAL PRIMARY KEY,
     role TEXT NOT NULL,
@@ -418,6 +451,7 @@ CREATE INDEX IF NOT EXISTS idx_market_skill_stats_country
 CREATE INDEX IF NOT EXISTS idx_market_skill_stats_skill_name
     ON market_skill_stats (skill_name);
 
+-- Предрассчитанные зарплатные агрегаты по роли/рынку/seniority/remote/currency.
 CREATE TABLE IF NOT EXISTS salary_aggregates (
     id BIGSERIAL PRIMARY KEY,
     role TEXT NOT NULL,
@@ -448,6 +482,7 @@ CREATE INDEX IF NOT EXISTS idx_salary_aggregates_country
 CREATE INDEX IF NOT EXISTS idx_salary_aggregates_currency
     ON salary_aggregates (currency);
 
+-- Предрассчитанные агрегаты по ролям и рынкам.
 CREATE TABLE IF NOT EXISTS market_role_stats (
     id BIGSERIAL PRIMARY KEY,
     role TEXT NOT NULL,
@@ -473,6 +508,7 @@ CREATE INDEX IF NOT EXISTS idx_market_role_stats_country
 -- 6. ETL / PIPELINE LOGS
 -- =========================================================
 
+-- Лог запусков ETL/DAG для мониторинга пайплайна.
 CREATE TABLE IF NOT EXISTS etl_runs (
     id BIGSERIAL PRIMARY KEY,
     pipeline_name TEXT NOT NULL DEFAULT 'jobs_pipeline',
@@ -480,6 +516,7 @@ CREATE TABLE IF NOT EXISTS etl_runs (
     run_date DATE NOT NULL DEFAULT CURRENT_DATE,
     source TEXT,
 
+    -- Основные счётчики по этапам пайплайна.
     jobs_extracted INTEGER DEFAULT 0,
     jobs_new_raw INTEGER DEFAULT 0,
     jobs_processed_raw INTEGER DEFAULT 0,
@@ -489,6 +526,7 @@ CREATE TABLE IF NOT EXISTS etl_runs (
     embeddings_created INTEGER DEFAULT 0,
     aggregates_updated BOOLEAN DEFAULT FALSE,
 
+    -- Итоговый статус выполнения запуска.
     status TEXT NOT NULL DEFAULT 'running',
     error_message TEXT,
 
@@ -522,6 +560,7 @@ CREATE INDEX IF NOT EXISTS idx_etl_runs_dag_id
 -- 7. UPDATED_AT TRIGGERS
 -- =========================================================
 
+-- Универсальная функция для автоматического обновления updated_at.
 CREATE OR REPLACE FUNCTION set_updated_at()
 RETURNS TRIGGER AS $$
 BEGIN
@@ -530,18 +569,21 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+-- Триггер updated_at для jobs_curated.
 DROP TRIGGER IF EXISTS trg_jobs_curated_set_updated_at ON jobs_curated;
 CREATE TRIGGER trg_jobs_curated_set_updated_at
 BEFORE UPDATE ON jobs_curated
 FOR EACH ROW
 EXECUTE FUNCTION set_updated_at();
 
+-- Триггер updated_at для ingestion_manifest.
 DROP TRIGGER IF EXISTS trg_ingestion_manifest_set_updated_at ON ingestion_manifest;
 CREATE TRIGGER trg_ingestion_manifest_set_updated_at
 BEFORE UPDATE ON ingestion_manifest
 FOR EACH ROW
 EXECUTE FUNCTION set_updated_at();
 
+-- Триггер updated_at для job_registry.
 DROP TRIGGER IF EXISTS trg_job_registry_set_updated_at ON job_registry;
 CREATE TRIGGER trg_job_registry_set_updated_at
 BEFORE UPDATE ON job_registry
