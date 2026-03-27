@@ -1,14 +1,14 @@
+# ingestion_node.py
 from app.agents.state import AgentState
+from app.agents.utils import get_extraction_chain
+from langchain_core.messages import AIMessage
 from app.agents.services.parser import ResumeParser
-from app.agents.utils import get_extraction_chain 
 from app.agents.services.taxonomy import IT_DS_TAXONOMY
-import fitz  # PyMuPDF
-import io
 
 def ingestion_node(state: AgentState):
     print("--- ЗАПУСК: INGESTION (Валидация и Очистка) ---")
-    
-    # Подготовка ПУСТОГО профиля (Обнуление)
+
+    # Пустой профиль (fallback)
     empty_candidate = {
         "name": "Кандидат",
         "country": "Remote",
@@ -25,54 +25,86 @@ def ingestion_node(state: AgentState):
 
     raw_file = state.get("raw_file_content")
     file_name = state.get("file_name", "Resume_PDF.pdf")
-    
-    # 2. Попытка извлечь текст
+
+    # ❗ 1. ЕСЛИ НЕТ ФАЙЛА — ПРОПУСКАЕМ INGESTION
+    if not raw_file:
+        print("[INGESTION SKIP] Нет файла — пропускаем ingestion")
+
+        return {
+            "candidate": state.get("candidate", empty_candidate),
+            "next_step": "analysis",
+            "error": None,
+            "stage": state.get("stage", "analysis")
+        }
+
+    # ❗ 2. ПАРСИНГ
     try:
         raw_text = ResumeParser.parse(raw_file, file_name)
     except Exception as e:
         print(f"Ошибка при парсинге файла: {e}")
-        raw_text = "" # Если парсер упал на битом файле
+        raw_text = ""
 
-    # 3. ГЛАВНЫЙ ФИЛЬТР: Проверка на пустоту или картинку без OCR
-    # Если текста меньше 100 символов — это либо пустой файл, либо скан/картинка
-    if not raw_text or len(raw_text.strip()) < 100:
-        print(f"Файл '{file_name}'/сообщение не содержит читаемого текста.")
-        
+    text = raw_text.strip()
+
+    # ❗ 3. ФИЛЬТР НЕИНФОРМАТИВНОГО ТЕКСТА
+    if (
+        not text
+        or len(text) < 700
+        or len(text.split()) < 100
+    ):
+        print(f"[INGESTION WARNING] Слишком короткий текст: {len(text)} символов")
+        print("[INGESTION] Используем старый candidate (если был)")
+
         return {
-            "candidate": empty_candidate, # Возвращаем пустую структуру
-            "error": f"Файл '{file_name}' пуст или является изображением без текстового слоя. Пожалуйста, загрузите текстовый PDF или DOCX.",
-            "next_step": "end" # Прерываем цепочку, не идем в Analysis
+            "candidate": state.get("candidate", empty_candidate),
+            "messages": [
+                AIMessage(content=f"""
+Файл '{file_name}' слишком короткий или неинформативный для анализа.
+
+Попробуй:
+- загрузить более полный PDF
+- или вставить текст резюме прямо в чат
+""")
+            ],
+            "error": None,
+            "next_step": "chat",
+            "stage": "chat"
         }
 
-    # 4. Если текст есть — отправляем в LLM
+    # ❗ 4. LLM ИЗВЛЕЧЕНИЕ
     print("Текст валиден, запускаем извлечение...")
     extracted_data = get_extraction_chain(raw_text)
 
-    # Костыль для пропусков потом можно сделать дополнение через коммуникацию с клентом
-    # Опыт, если не указан то 0.5
+    # Опыт
     experience_years = extracted_data.experience_years
     if experience_years == 0:
         print("Стаж не найден. Ставим 0.5")
         experience_years = 0.5
 
-    # Страна/Город: если None, ставим Remote
+    # Локация
     country = extracted_data.country or "Remote"
     city = extracted_data.city or "Remote"
 
-    # Специализация, если пусто, то ML Engineer
+    # Специализация
     specialization = extracted_data.specialization or "ML Engineer"
-    # Обогащение скилов
-    # Берем "сырые" скиллы из единственного поля
+
+    # ❗ 5. ОБОГАЩЕНИЕ СКИЛЛОВ
     raw_skills = extracted_data.skills or []
     enriched_skills = set(raw_skills)
     raw_text_lower = raw_text.lower()
 
     print("Обогащаем единый список навыков...")
+
     for parent_skill, children in IT_DS_TAXONOMY.items():
-        # Проверяем наличие дочерних навыков в извлеченных скиллах или в самом тексте
-        has_child_in_list = any(c.lower() in [s.lower() for s in raw_skills] for c in children)
-        has_child_in_text = any(c.lower() in raw_text_lower for c in children)
-        
+        has_child_in_list = any(
+            c.lower() in [s.lower() for s in raw_skills]
+            for c in children
+        )
+        has_child_in_text = any(
+            c.lower() in raw_text_lower
+            for c in children
+        )
+
         if has_child_in_list or has_child_in_text:
             if parent_skill not in enriched_skills:
                 enriched_skills.add(parent_skill)
@@ -81,6 +113,7 @@ def ingestion_node(state: AgentState):
     final_skills = list(enriched_skills)
     print(final_skills)
 
+    # ❗ 6. ФИНАЛЬНЫЙ ВОЗВРАТ
     return {
         "candidate": {
             "name": extracted_data.name,
@@ -95,6 +128,8 @@ def ingestion_node(state: AgentState):
             "foreign_languages": extracted_data.foreign_languages,
             "skills": final_skills
         },
+        "raw_text": raw_text,  # ❗ важно для дальнейших шагов
         "next_step": "analysis",
-        "error": None # Сбрасываем прошлые ошибки
+        "error": None,
+        "stage": "analysis"
     }

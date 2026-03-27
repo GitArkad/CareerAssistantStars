@@ -1,9 +1,11 @@
+# utils.py
+
 import os
 from dotenv import load_dotenv
 
 from langchain_groq import ChatGroq
 from langchain_core.prompts import ChatPromptTemplate
-from .services.schemas import ExtractionSchema 
+from app.agents.services.schemas import ExtractionSchema
 
 # Загружаем переменные из .env
 load_dotenv()
@@ -13,8 +15,9 @@ def get_extraction_chain(text: str):
     if api_key is None:
         raise ValueError("GROQ_API_KEY не определен")
     
+    GROQ_SMART_MODEL = os.getenv("GROQ_SMART_MODEL", "llama-3.1-8b-instant")
     llm = ChatGroq(
-        model="llama-3.3-70b-versatile", # модель для парсинга резюме
+        model=GROQ_SMART_MODEL, # модель для парсинга резюме
         api_key=api_key,
         temperature=0 
     )

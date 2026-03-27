@@ -1,4 +1,5 @@
-from typing import List, Optional, TypedDict, Dict, Any
+# app/agents2/state.py
+from typing import TypedDict, List, Optional, Dict, Any
 
 class CandidateProfile(TypedDict):
     name: str
@@ -30,3 +31,15 @@ class AgentState(TypedDict):
     summary: Optional[str]
     next_step: str
     stage: str
+    intent: Optional[str]
+    last_action: Optional[str]
+
+    top_vacancies: Optional[List[Dict[str, Any]]]
+    roadmap: Optional[Dict[str, Any]]
+    custom_resume: Optional[Dict[str, Any]]
+    mini_interview: Optional[Dict[str, Any]]
+
+    # Защита от зацикливаний
+    steps_taken: Optional[int]
+    max_steps: Optional[int]
+    visited_nodes: Optional[set]

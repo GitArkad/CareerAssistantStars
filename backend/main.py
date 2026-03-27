@@ -1,80 +1,63 @@
-import os
-import asyncio
-from langchain_core.messages import HumanMessage
-# Убедись, что в graph.py career_app скомпилирован с MemorySaver!
-from app.agents.graph import career_app
+from fastapi import FastAPI, UploadFile, File, Form
+from typing import Optional
+import json
 
-async def run_career_assistant():
-    print("Запуск Career AI Assistant (Memory Mode)")
-    
-    # 1. Читаем реальный файл Resume_PDF.pdf
-    file_path = "Resume_PDF.pdf" 
-    
-    if not os.path.exists(file_path):
-        print(f"Файл {file_path} не найден в папке backend!")
-        return
+from app.agents2.tools.career_agent import CareerAgent
+from app.agents2.services.input_processor import InputProcessor
+from app.agents2.nodes.router_node import router_node
 
-    # Читаем байты файла
-    with open(file_path, "rb") as f:
-        pdf_bytes = f.read()
+app = FastAPI()
 
-    # Формируем начальное состояние с реальными данными
-    initial_input = {
-        "messages": [HumanMessage(content="Проанализируй моё резюме")], 
-        "raw_file_content": pdf_bytes, # ТЕПЕРЬ ТУТ РЕАЛЬНЫЙ PDF
-        "file_name": file_path,
-        "candidate": {}, 
-        "market": {}
-    }
+agent = CareerAgent()
+processor = InputProcessor()
 
-    config = {"configurable": {"thread_id": "andrey_session_1"}}
 
-    print(f"--- Шаг 1: Анализ резюме '{file_path}' ---")
-    current_state = await career_app.ainvoke(initial_input, config=config)
-    
-    # Печатаем отчет из summary_node
-    if "summary" in current_state:
-        print(f"\n[AGENT]: {current_state['summary']}")
+@app.post("/chat")
+async def chat(
+    message: Optional[str] = Form(None),
+    file: Optional[UploadFile] = File(None),
+    state: Optional[str] = Form(None),
+):
+    import json
 
-    # 2. ЦИКЛ ДИАЛОГА (Чат)
-    while True:
+    # -----------------------------
+    # 1. восстановление state
+    # -----------------------------
+    if state:
         try:
-            user_text = input("\n[YOU]: ")
-            if user_text.lower() in ["exit", "quit", "стоп", "пока"]:
-                print("До связи!")
-                break
-
-            # Отправляем ТОЛЬКО новое сообщение. 
-            # Благодаря thread_id граф НЕ пойдет в ingestion/analysis снова.
-            input_data = {"messages": [HumanMessage(content=user_text)]}
-            
-            # Запускаем граф. Он подхватит историю из памяти.
-            output = await career_app.ainvoke(input_data, config=config)
-
-            # ЛОГИКА ВЫВОДА: ищем последний текстовый ответ от AI
-            all_messages = output.get("messages", [])
-            found_reply = False
-            
-            for msg in reversed(all_messages):
-                # Нам нужно именно сообщение от ассистента с текстом
-                if msg.type == "ai" and msg.content.strip():
-                    print(f"\n[AGENT]: {msg.content}")
-                    found_reply = True
-                    break
-            
-            if not found_reply:
-                print("\n[SYSTEM]: Агент думает или выполняет задачу...")
-
-        except Exception as e:
-            print(f"\n[ERROR]: Произошла ошибка: {e}")
-            break
-
-if __name__ == "__main__":
-    # Проверка переменных окружения перед стартом
-    if not os.getenv("GROQ_API_KEY"):
-        print("❌ Ошибка: GROQ_API_KEY не найден в переменных окружения!")
+            state = json.loads(state)
+        except json.JSONDecodeError:
+            state = {}
     else:
-        try:
-            asyncio.run(run_career_assistant())
-        except KeyboardInterrupt:
-            print("\nСессия завершена пользователем.")
+        state = {}
+
+    # -----------------------------
+    # 2. читаем файл
+    # -----------------------------
+    file_content = None
+    if file:
+        file_content = await file.read()
+
+    # -----------------------------
+    # 3. обработка сообщения и/или файла
+    # -----------------------------
+    state = processor.process(
+        message=message,
+        file_bytes=file_content,
+        state=state
+    )
+
+    # -----------------------------
+    # 4. запускаем агента
+    # -----------------------------
+    state = router_node(state)
+
+    # -----------------------------
+    # 5. история
+    # -----------------------------
+    state.setdefault("history", []).append({
+        "message": message,
+        "action": state.get("action")
+    })
+
+    return state

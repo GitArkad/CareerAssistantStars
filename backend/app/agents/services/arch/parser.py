@@ -1,3 +1,4 @@
+# parser.py
 import io
 import fitz  # PyMuPDF
 from docx import Document

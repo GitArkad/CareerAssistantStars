@@ -1,4 +1,5 @@
 import os
+from dotenv import load_dotenv
 import numpy as np
 from collections import Counter
 from qdrant_client import QdrantClient
@@ -7,14 +8,17 @@ from qdrant_client import models
 from app.agents.state import AgentState
 from app.agents.services.qdrant_service import get_geo_filters
 
+
+load_dotenv()
+
 # Настройки
 QDRANT_URL = os.getenv("QDRANT_URL", "http://localhost:6333")
-COLLECTION_NAME = "vacancies"
+COLLECTION_NAME = os.getenv("QDRANT_COLLECTION_NAME", "vacancies")
 
 # Инициализируем клиента и модель ОДИН РАЗ при запуске модуля
 client = QdrantClient(url=QDRANT_URL)
 # ВАЖНО: модель та же, что была при индексации
-client.set_model("intfloat/multilingual-e5-large")
+client.set_model(os.getenv("EMBEDDING_MODEL", "intfloat/multilingual-e5-large"))
 
 def clean_skills(raw_data):
     if isinstance(raw_data, list):

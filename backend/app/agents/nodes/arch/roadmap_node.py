@@ -1,6 +1,11 @@
 import os
+from dotenv import load_dotenv
 from groq import Groq
 from app.agents.state import AgentState
+
+load_dotenv()
+
+GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
 
 client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
@@ -27,7 +32,7 @@ def roadmap_node(state: AgentState):
     """
 
     response = client.chat.completions.create(
-        model="llama-3.1-70b-versatile", # Для качественного планирования лучше модель помощнее
+        model=GROQ_MODEL, # Для качественного планирования лучше модель помощнее
         messages=[{"role": "user", "content": prompt}]
     )
 

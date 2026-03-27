@@ -1,6 +1,7 @@
 import os
 from groq import Groq
 from app.agents.state import AgentState
+from langchain_core.messages import ToolMessage
 
 # Инициализация клиента (можно вынести в отдельный конфиг)
 client = Groq(
@@ -49,7 +50,7 @@ def summary_node(state: AgentState):
     
     # ПРОВЕРКА: Если данных нет в state, берем их принудительно (для теста)
     if not market.get("top_vacancies"):
-        print("⚠️ ВНИМАНИЕ: Данные рынка пусты в state!")
+        print("ВНИМАНИЕ: Данные рынка пусты в state!")
 
     # Формируем контекст максимально явно
     full_context = f"""
@@ -81,8 +82,8 @@ def summary_node(state: AgentState):
         # Сохраняем совет в сообщения или отдельное поле состояния
         return {
             "summary": advice,
-            "messages": [advice],
-            "next_step": "end"
+            # "messages": [advice],
+            # "next_step": "end"
         }
         
     except Exception as e:

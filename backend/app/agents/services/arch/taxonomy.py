@@ -22,3 +22,20 @@ IT_DS_TAXONOMY = {
     # Визуализация
     "Data Visualization": ["Apache Superset", "Tableau", "PowerBI", "Matplotlib", "Seaborn", "Plotly"]
 }
+
+ROADMAP_TRIGGERS = [
+    "roadmap",
+    "дорожная карта",
+    "план развития",
+    "план обучения",
+    "что учить",
+    "как расти",
+    "что дальше учить"
+]
+
+RESUME_TRIGGERS = [
+    "резюме",
+    "cv",
+    "улучши резюме",
+    "покажи резюме"
+]
