@@ -43,6 +43,7 @@ langchain-classic==1.0.3
 langchain-community==0.4.1
 langchain-core==1.2.21
 langchain-groq==1.1.2
+langchain-qdrant==1.1.0
 langchain-text-splitters==1.1.1
 langgraph==1.1.3
 langgraph-checkpoint==4.0.1

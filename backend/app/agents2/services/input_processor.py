@@ -31,9 +31,9 @@ class InputProcessor:
         if message:
             msg = message.lower()
 
-            if "roadmap" in msg:
-                state["action"] = "roadmap"
-            elif "интерв" in msg:
+            # if "roadmap" in msg:
+            #     state["action"] = "roadmap"
+            if "интерв" in msg:
                 state["action"] = "interview"
             elif "резюме" in msg:
                 state["action"] = "resume"

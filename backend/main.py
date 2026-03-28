@@ -41,11 +41,13 @@ async def chat(
     # -----------------------------
     # 3. обработка сообщения и/или файла
     # -----------------------------
+    state["message"] = message
+    
     state = processor.process(
-        message=message,
-        file_bytes=file_content,
-        state=state
-    )
+    message=message,
+    file_bytes=file_content,
+    state=state
+)
 
     # -----------------------------
     # 4. запускаем агента

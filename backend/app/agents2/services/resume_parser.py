@@ -1,10 +1,10 @@
-# app/agents2/services/resume_parser.py
-
 import json
 import re
 from app.agents2.llm_client import run_local_llm
 from PyPDF2 import PdfReader
 import io
+
+from app.agents2.utils.normalizers import normalize_city, normalize_country
 
 
 def clean_json(text: str) -> str:
@@ -43,9 +43,12 @@ def parse_text(text: str, use_smart_model: bool = False) -> dict:
         json_text = clean_json(response)
         data = json.loads(json_text)
 
-        # 🔥 защита от мусора
         if not isinstance(data.get("skills"), list):
             data["skills"] = []
+
+        # 🔥 нормализация
+        data["city_normalized"] = normalize_city(data.get("city"))
+        data["country_normalized"] = normalize_country(data.get("country"))
 
         return data
 
@@ -56,9 +59,11 @@ def parse_text(text: str, use_smart_model: bool = False) -> dict:
         return {
             "skills": ["python"],
             "city": None,
+            "city_normalized": None,
+            "country": None,
+            "country_normalized": None,
             "specialization": None
         }
-
 
 
 def parse_pdf(file_bytes: bytes, use_smart_model: bool = False) -> dict:
