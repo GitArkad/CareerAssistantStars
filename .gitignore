@@ -170,3 +170,5 @@ webserver_config.py
 data/*.csv
 data/*.json
 !data/.gitkeep
+.toml
+.streamlit/

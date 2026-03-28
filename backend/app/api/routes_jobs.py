@@ -1,12 +1,9 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
 import psycopg2
 import os
 
 router = APIRouter()
 
-# ================================
-# ПОДКЛЮЧЕНИЕ К POSTGRES
-# ================================
 def get_db_connection():
     return psycopg2.connect(
         dbname=os.getenv("POSTGRES_DB"),
@@ -17,18 +14,52 @@ def get_db_connection():
     )
 
 
-# ================================
-# ПОЛУЧИТЬ ВАКАНСИИ
-# ================================
 @router.get("/")
-def get_jobs(limit: int = 10):
+def get_jobs(
+    country: str = None,
+    seniority: str = None,
+    remote: bool = None,
+    limit: int = 10
+):
     conn = get_db_connection()
     cur = conn.cursor()
 
-    cur.execute(f"SELECT * FROM jobs LIMIT {limit}")
+    query = """
+        SELECT job_id, title, company_name, city, salary_from, salary_to
+        FROM jobs_curated
+        WHERE 1=1
+    """
+    params = []
+
+    if country:
+        query += " AND country_normalized = %s"
+        params.append(country)
+
+    if seniority:
+        query += " AND seniority_normalized = %s"
+        params.append(seniority)
+
+    if remote is not None:
+        query += " AND remote = %s"
+        params.append(remote)
+
+    query += " LIMIT %s"
+    params.append(limit)
+
+    cur.execute(query, params)
     rows = cur.fetchall()
+
+    columns = [desc[0] for desc in cur.description]
+
+    result = [
+        dict(zip(columns, row))
+        for row in rows
+    ]
 
     cur.close()
     conn.close()
 
-    return {"count": len(rows), "data": rows}
+    return {
+        "count": len(result),
+        "data": result
+    }
