@@ -23,8 +23,6 @@ def get_client() -> QdrantClient:
         _client = QdrantClient(url=QDRANT_URL, check_compatibility=False)
     return _client
 
-from qdrant_client import models
-
 def search_vacancies(
     query_text: str,
     skills: Optional[List[str]] = None,

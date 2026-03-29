@@ -35,10 +35,40 @@ def init_db_uuid():
         vectors_config=client.get_fastembed_vector_params(),
     )
 
+    print("🛠 Создание индексов для фильтрации...")
+    
+    # 1. Индекс по городу (точное совпадение)
+    client.create_payload_index(
+        collection_name=COLLECTION_NAME,
+        field_name="city",
+        field_schema=models.PayloadSchemaType.KEYWORD,
+    )
+
+    # 2. Индекс по стране
+    client.create_payload_index(
+        collection_name=COLLECTION_NAME,
+        field_name="country",
+        field_schema=models.PayloadSchemaType.KEYWORD,
+    )
+
+    # 3. Индекс по булевому полю (релокация)
+    client.create_payload_index(
+        collection_name=COLLECTION_NAME,
+        field_name="relocation",
+        field_schema=models.PayloadSchemaType.BOOL,
+    )
+
+    # 4. Индекс по зарплате (числовой - для фильтров типа "больше чем")
+    client.create_payload_index(
+        collection_name=COLLECTION_NAME,
+        field_name="salary_from",
+        field_schema=models.PayloadSchemaType.INTEGER,
+    )
+
     # 2. Полный список вакансий с полем 'country' и новым полем 'url'
     raw_vacancies: List[Dict[str, Any]] = [
         {
-            "title": "Junior ML Engineer", "company": "SberAI", "city": "Moscow", "country": "Russia",
+            "title": "Junior ML Engineer", "company": "SberAI", "city": "MOSCOW", "country": "RUSSIA",
             "work_format": "Office", "relocation": False, "grade": "Junior",
             "salary_from": 150000, "salary_to": 200000, "currency": "RUB", 
             "skills": ["Python", "PyTorch", "SQL"],
@@ -46,7 +76,7 @@ def init_db_uuid():
             "url": "https://career.sber.ru/vacancies/sberai-jr-ml"
         },
         {
-            "title": "AI Developer", "company": "Global Tech", "city": "Remote", "country": "Germany",
+            "title": "AI Developer", "company": "Global Tech", "city": "Remote", "country": "GERMANY",
             "work_format": "Remote", "relocation": True, "grade": "Middle",
             "salary_from": 4500, "salary_to": None, "currency": "USD", 
             "skills": ["Python", "Docker"],
@@ -54,7 +84,7 @@ def init_db_uuid():
             "url": "https://globaltech.com/careers/ai-dev-remote"
         },
         {
-            "title": "ML Разработчик (NLP)", "company": "T-Bank", "city": "Saint-Petersburg", "country": "Russia",
+            "title": "ML Разработчик (NLP)", "company": "T-Bank", "city": "SAINT PETERSBURG", "country": "RUSSIA",
             "work_format": "Hybrid", "relocation": True, "grade": "Middle",
             "salary_from": None, "salary_to": None, "currency": "RUB", 
             "skills": ["Python", "Transformers"],
@@ -62,7 +92,7 @@ def init_db_uuid():
             "url": "https://tbank.ru/career/it/ml-nlp"
         },
         {
-            "title": "Data Scientist", "company": "Ozon", "city": "Moscow", "country": "Russia",
+            "title": "Data Scientist", "company": "Ozon", "city": "MOSCOW", "country": "RUSSIA",
             "work_format": "Hybrid", "relocation": False, "grade": "Middle", 
             "salary_from": 170000, "salary_to": 250000, "currency": "RUB", 
             "skills": ["SQL", "Pandas", "CatBoost"],
@@ -70,7 +100,7 @@ def init_db_uuid():
             "url": "https://job.ozon.ru/vacancy/ds-middle"
         },
         {
-            "title": "NLP Researcher", "company": "OpenAI Partner", "city": "San Francisco", "country": "USA",
+            "title": "NLP Researcher", "company": "OpenAI Partner", "city": "SAN FRANCISCO", "country": "UNITED STATES",
             "work_format": "Office", "relocation": True, "grade": "Senior",
             "salary_from": 5500, "salary_to": 8500, "currency": "USD", 
             "skills": ["Python", "LLM", "LangChain"],
@@ -78,7 +108,7 @@ def init_db_uuid():
             "url": "https://openaipartner.ai/jobs/nlp-senior-researcher"
         },
         {
-            "title": "Computer Vision Engineer", "company": "DeepVision", "city": "Belgrade", "country": "Serbia",
+            "title": "Computer Vision Engineer", "company": "DeepVision", "city": "BELGRADE", "country": "SERBIA",
             "work_format": "Office", "relocation": True, "grade": "Middle",
             "salary_from": 3000, "salary_to": 4500, "currency": "EUR", 
             "skills": ["OpenCV", "C++", "PyTorch"],
@@ -86,7 +116,7 @@ def init_db_uuid():
             "url": "https://deepvision.rs/career/cv-engineer"
         },
         {
-            "title": "MLOps Engineer", "company": "Fintech Global", "city": "Astana", "country": "Kazakhstan",
+            "title": "MLOps Engineer", "company": "Fintech Global", "city": "ASTANA", "country": "KAZAKHSTAN",
             "work_format": "Hybrid", "relocation": False, "grade": "Middle",
             "salary_from": 2500, "salary_to": 3500, "currency": "USD", 
             "skills": ["Kubernetes", "MLflow", "Python"],
@@ -94,7 +124,7 @@ def init_db_uuid():
             "url": "https://fintechglobal.kz/jobs/mlops"
         },
         {
-            "title": "Junior Data Analyst", "company": "Retail Group", "city": "Minsk", "country": "Belarus",
+            "title": "Junior Data Analyst", "company": "Retail Group", "city": "MINSK", "country": "BELARUS",
             "work_format": "Office", "relocation": False, "grade": "Junior",
             "salary_from": 1000, "salary_to": 1500, "currency": "USD", 
             "skills": ["SQL", "Tableau", "Excel"],
@@ -102,7 +132,7 @@ def init_db_uuid():
             "url": "https://retailgroup.by/vacancies/jr-data-analyst"
         },
         {
-            "title": "Lead AI Architect", "company": "Neural Systems", "city": "Limassol", "country": "Cyprus",
+            "title": "Lead AI Architect", "company": "Neural Systems", "city": "LIMASSOL", "country": "CYPRUS",
             "work_format": "Remote", "relocation": True, "grade": "Senior",
             "salary_from": 6000, "salary_to": 9000, "currency": "EUR", 
             "skills": ["PyTorch", "System Design", "Cloud Architecture"],

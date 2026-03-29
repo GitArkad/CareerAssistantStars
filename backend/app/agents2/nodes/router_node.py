@@ -1,13 +1,18 @@
 from app.agents2.tools.career_agent import CareerAgent
 from app.agents2.services.resume_parser import parse_pdf
 
+
 def router_node(state):
     """
     Router node:
-    - если есть файл, парсим PDF
-    - запускаем CareerAgent.route
+    - парсит PDF (если есть)
+    - определяет action
+    - передаёт ВСЁ в agent.route()
     """
+
     agent = CareerAgent()
+
+    message = (state.get("message") or "").lower()
 
     # -----------------------------
     # 1. FILE → parse resume
@@ -27,8 +32,46 @@ def router_node(state):
         state["last_action"] = "PDF распарсен"
 
     # -----------------------------
-    # 2. MAIN AGENT
+    # 2. DIGIT INPUT (НЕ ТРОГАЕМ ACTION)
     # -----------------------------
-    state = agent.route(state)
+    if message.isdigit():
+        print("🔢 DIGIT INPUT → skip action override")
+        return agent.route(state)
 
-    return state
+    # -----------------------------
+    # 3. COMMANDS
+    # -----------------------------
+    if "search" in message:
+        state["action"] = "search"
+
+    elif "roadmap" in message:
+        state["action"] = "roadmap"
+
+    elif "resume" in message:
+        state["action"] = "resume"
+
+    elif "interview" in message:
+        state["action"] = "interview"
+
+    # -----------------------------
+    # 4. AUTO SEARCH
+    # -----------------------------
+    elif state.get("candidate") and not state.get("top_vacancies"):
+        print(f"ROUT_NODE 4.1  state['action'] - {state["action"]}")
+        state["action"] = "search"
+        print(f"ROUT_NODE 4.2  state['action'] - {state["action"]}")
+
+    # -----------------------------
+    # 5. DEFAULT
+    # -----------------------------
+    else:
+        print(f"ROUT_NODE 5.1  state['action'] - {state["action"]}")
+        state["action"] = state.get("action", "search")
+        print(f"ROUT_NODE 5.2  state['action'] - {state["action"]}")
+
+
+    # -----------------------------
+    # 6. MAIN FLOW
+    # -----------------------------
+    return agent.route(state)
+

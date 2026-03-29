@@ -1,7 +1,5 @@
 # career_agent.py
 
-# career_agent.py
-
 import logging
 from typing import List, Dict
 
@@ -31,78 +29,71 @@ class CareerAgent:
         return base_score * 0.6 + overlap_score * 0.4
     
     def handle_vacancy_choice(self, state: Dict) -> Dict:
-        print("\n" + "="*30)
-        print("🚀 ENTERING handle_vacancy_choice")
-        
+        print("✅ INSIDE HANDLE VACANCY CHOICE")
         message = state.get("message", "")
         top_vacancies = state.get("top_vacancies", [])
-
-        # --- УМНОЕ ВОССТАНОВЛЕНИЕ ИЗ ИСТОРИИ ---
-        if not top_vacancies and state.get("history"):
-            print("⚠️ vacancies_count is 0! Trying to recover from history...")
-            for entry in reversed(state["history"]):
-                raw_data = entry.get("assistant")
-                
-                # 1. Если это строка, похожая на словарь, превращаем в словарь
-                if isinstance(raw_data, str) and ("'vacancies':" in raw_data or '"vacancies":' in raw_data):
-                    try:
-                        # Заменяем одинарные кавычки на двойные для json.loads или используем eval
-                        # Безопаснее всего в данном случае ast.literal_eval
-                        import ast
-                        raw_data = ast.literal_eval(raw_data)
-                    except:
-                        continue
-
-                # 2. Если теперь это словарь, ищем в нем ключ 'vacancies'
-                if isinstance(raw_data, dict) and "vacancies" in raw_data:
-                    top_vacancies = raw_data["vacancies"]
-                # 3. Или если это был просто список
-                elif isinstance(raw_data, list):
-                    top_vacancies = raw_data
-
-                if top_vacancies:
-                    state["top_vacancies"] = top_vacancies
-                    print(f"✅ Recovered {len(top_vacancies)} vacancies from history!")
-                    break
-        # ---------------------------------------
-
-        print(f"DEBUG DATA: msg='{message}', vacancies_count={len(top_vacancies)}")
         
+        # Используем твой экстрактор
         idx = extract_number(message)
         
-        # Теперь len(top_vacancies) должен быть > 0
-        if idx is not None and len(top_vacancies) > 0 and 0 < idx <= len(top_vacancies):
+        if idx is not None and 0 < idx <= len(top_vacancies):
             choice_idx = idx - 1
             selected = top_vacancies[choice_idx]
             
-            print(f"✅ SELECTED: {selected.get('title')}")
+            print(f"✅ SELECTED VACANCY: {selected['title']} at {selected['company']}")
             
-            # Дальше твой код генерации резюме...
             state["selected_vacancy"] = selected
-            state["action"] = "resume"
-            state["stage"] = "generating_resume"
+            state["action"] = "resume"  # Переключаем на режим резюме
+            state["stage"] = "generating_resume" # Меняем стейт
             
-            # Вызываем LLM (не забудь про try/except из-за лимитов Groq)
-            try:
-                candidate = state.get("candidate", {})
-                skills = candidate.get("skills", "Python, ML")
-                prompt = f"Напиши резюме для {selected.get('title')}. Мои навыки: {skills}"
-                state["response"] = str(run_local_llm(prompt))
-                state["stage"] = "resume_ready"
-            except Exception as e:
-                state["response"] = f"Ошибка LLM: {str(e)}"
+            # ВАЖНО: чтобы не ждать следующего запроса от пользователя, 
+            # мы рекурсивно вызываем route, но уже с новым action="resume"
+            return self.route(state)
             
-            return state
-
-        state["response"] = f"Пожалуйста, введите корректный номер от 1 до {len(top_vacancies)}."
+        state["response"] = "Пожалуйста, введите корректный номер вакансии (1, 2, 3...)"
         return state
+
+
+    def llm_parse(self, message: str) -> dict:
+        prompt = f"""
+            Верни JSON: {{"vacancy_index": number или null}}
+
+            Сообщение: {message}
+            """
+        # prompt = f"""
+        #     Ты парсер пользовательского ввода.
+
+        #     Задача:
+        #     Определи, хочет ли пользователь выбрать вакансию по номеру.
+
+        #     Ответь строго JSON без пояснений.
+
+        #     Формат:
+        #     {{
+        #     "vacancy_index": number | null
+        #     }}
+
+        #     Примеры:
+        #     "2" → {{ "vacancy_index": 2 }}
+        #     "вторая" → {{ "vacancy_index": 2 }}
+        #     "возьми третью" → {{ "vacancy_index": 3 }}
+        #     "не знаю" → {{ "vacancy_index": null }}
+
+        #     Сообщение:
+        #     {message}
+        #     """
+
+        try:
+            response = run_local_llm(prompt)
+            return json_safe_load(response)
+        except Exception:
+            return {}
 
 
     # -----------------------------
     # MAIN ROUTE
     # -----------------------------
     def route(self, state: Dict) -> Dict:
-        print(f"career main_route do  state['action'] - {state.get('action', 'search')}")
         message = (state.get("message") or "").strip().lower()
         stage = (state.get("stage") or "").strip()
         
@@ -114,9 +105,8 @@ class CareerAgent:
             print("👉 AGENT: handling vacancy choice")
             return self.handle_vacancy_choice(state)
         # --------------------------
-        print(f"career main_route do  state['action'] - {state.get('action', 'search')}")
+
         action = state.get("action", "search")
-        print(f"career main_route posle  state['action'] - {state['action']}")
         
         # Вторичная защита от смены action на цифрах
         if not message.isdigit():
@@ -126,9 +116,29 @@ class CareerAgent:
                 action = "roadmap"
             elif "interview" in message:
                 action = "interview"
-        print(f"career main_route  state['action'] - {state['action']}")
+            # Если это просто текст, который не совпал с командами — оставляем как есть или search
+        
         state["action"] = action
-        print(f"career main_route  state['action'] - {state['action']}")
+
+        # message = (state.get("message") or "").lower()
+        # stage = (state.get("stage") or "").strip()
+        # print(stage)
+        # if stage == "waiting_vacancy_choice":
+        #     print("👉 HANDLE VACANCY CHOICE TRIGGERED")  # debug
+        #     return self.handle_vacancy_choice(state)
+        
+        # action = state.get("action", "search")
+        # print(f"DEBUG action до условия {action}")
+        # if not message.isdigit():   # ← ВАЖНО
+        #     if "resume" in message:
+        #         action = "resume"
+        #     elif "roadmap" in message:
+        #         action = "roadmap"
+        #     else:
+        #         action = "search"
+        # print(f"DEBUG action после условия {action}")
+
+        # state["action"] = action
 
         candidate = state.get("candidate", {})
         skills = candidate.get("skills", []) or ["python"]
@@ -310,12 +320,14 @@ class CareerAgent:
 
             # roadmap = run_local_llm(prompt, use_smart_model=True)
                        
+
             roadmap = {
                 skill: f"Изучи {skill} и сделай 1-2 проекта"
                 for skill in missing[:5]
             }
 
             if isinstance(roadmap, dict):
+                # если это dict — превращаем в строку
                 roadmap = "\n".join([
                     f"{k} — {v}" if isinstance(v, str) else str(v)
                     for k, v in roadmap.items()
@@ -332,6 +344,7 @@ class CareerAgent:
 
             roadmap = "\n".join(cleaned)
 
+            # если выдал  ответ пустой или меньше 10 символов
             if not roadmap or len(roadmap) < 10:
                 roadmap = "Рекомендуется изучить ключевые навыки из вакансий: " + ", ".join(market_skills[:3])
 
@@ -347,7 +360,10 @@ class CareerAgent:
         # RESUME
         # -----------------------------
         if action == "resume":
+            print("ROUTE VERSION 2")
+
             top_vacancies = state.get("top_vacancies", [])
+            # resume_skills = state.get("resume_skills")
             resume_skills = state.get("resume_skills") or candidate.get("skills")
             stage = state.get("stage")
             message = (state.get("message") or "").strip()
@@ -355,8 +371,7 @@ class CareerAgent:
             selected = state.get("selected_vacancy")
             print("DEBUG SELECTED:", state.get("selected_vacancy"))
 
-            # FIX: защита от повторной генерации
-            if selected and stage != "resume_ready":
+            if selected:
                 prompt = f"""
                 Ты карьерный консультант.
 
@@ -380,10 +395,13 @@ class CareerAgent:
                 state["custom_resume"] = resume
                 state["response"] = resume
                 state["stage"] = "resume_ready"
-                state["selected_vacancy"] = None
+                state["selected_vacancy"] = None  # 🔥 фикс
 
                 return state
 
+            # -----------------------------
+            # CASE 1: НЕТ РЕЗЮМЕ
+            # -----------------------------
             if not resume_skills:
                 state["response"] = (
                     "Чтобы сформировать резюме, загрузите файл с резюме."
@@ -391,6 +409,9 @@ class CareerAgent:
                 state["stage"] = "waiting_resume"
                 return state
 
+            # -----------------------------
+            # AUTO SEARCH (если есть резюме, но нет вакансий)
+            # -----------------------------
             if not top_vacancies:
                 vacancies = search_vacancies(
                     query_text=user_query,
@@ -400,9 +421,103 @@ class CareerAgent:
                     limit=5
                 )
 
+                for v in vacancies:
+                    v["final_score"] = self.calculate_score(v, skills)
+
+                vacancies = sorted(
+                    vacancies,
+                    key=lambda x: x.get("final_score", 0),
+                    reverse=True
+                )
+
                 state["top_vacancies"] = vacancies
                 top_vacancies = vacancies
 
+            # -----------------------------
+            # CASE 2: есть резюме, но вакансий нет
+            # -----------------------------
+            if not top_vacancies:
+                prompt = f"""
+                    Ты карьерный консультант.
+
+                    Навыки кандидата:
+                    {resume_skills}
+
+                    Сформируй улучшенное резюме:
+                    - кратко
+                    - структурировано
+                    """
+
+                resume = run_local_llm(prompt)
+
+                if not isinstance(resume, str):
+                    resume = str(resume)
+
+                state["custom_resume"] = resume
+                state["response"] = resume
+                state["stage"] = "resume_ready"
+                return state
+
+            # -----------------------------
+            # CASE: выбор вакансии
+            # -----------------------------
+            if stage == "waiting_vacancy_choice":
+
+                idx = extract_number(message)
+
+                # fallback на LLM
+                if idx is None and len(message) > 3:
+                    parsed = self.llm_parse(message)
+                    idx = parsed.get("vacancy_index")
+
+                if idx is not None and idx > 0:
+                    choice = idx - 1
+
+                    if 0 <= choice < len(top_vacancies):
+                        vacancy = top_vacancies[choice]
+                        state["selected_vacancy"] = vacancy
+
+                        prompt = f"""
+                            Ты карьерный консультант.
+
+                            Навыки кандидата:
+                            {resume_skills}
+
+                            Вакансия:
+                            {vacancy}
+
+                            Сделай резюме:
+                            - под требования вакансии
+                            - кратко
+                            - структурировано
+                            """
+
+                        resume = run_local_llm(prompt)
+
+                        if not isinstance(resume, str):
+                            resume = str(resume)
+
+                        state["custom_resume"] = resume
+                        state["response"] = resume
+                        state["stage"] = "resume_ready"
+
+                    else:
+                        state["response"] = (
+                            f"В списке только {len(top_vacancies)} вакансий.\n"
+                            f"Выберите номер от 1 до {len(top_vacancies)}."
+                        )
+
+                else:
+                    state["response"] = (
+                        "Не понял выбор.\n"
+                        "Напишите номер вакансии (например: 1 или 2)"
+                    )
+
+                return state
+
+            # -----------------------------
+            # CASE 3: есть всё → предлагаем выбор
+            # -----------------------------
             state["stage"] = "waiting_vacancy_choice"
 
             state["response"] = {
@@ -420,6 +535,7 @@ class CareerAgent:
         # -----------------------------
         if action == "interview":
 
+            # 🔥 AUTO SEARCH
             if not state.get("market"):
                 vacancies = search_vacancies(
                     query_text=user_query,
@@ -450,8 +566,7 @@ class CareerAgent:
             return state
 
         return state
-
-
+    
 # =========================================
 # 🔧 HELPERS
 # =========================================
