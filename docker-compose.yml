@@ -23,6 +23,11 @@ x-airflow-common: &airflow-common
     AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW__API_AUTH__JWT_SECRET}
     AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: "true"
     AIRFLOW_CONFIG: /opt/airflow/config/airflow.cfg
+    EMAIL_YOUR: ${EMAIL_YOUR}
+    ADZUNA_APP_ID: ${ADZUNA_APP_ID_YOUR}
+    ADZUNA_APP_KEY: ${ADZUNA_APP_KEY_YOUR}
+    USAJOBS_API_KEY: ${USAJOBS_API_KEY_YOUR}
+    PYTHONPATH: /opt/airflow/project
 
     POSTGRES_DB: ${POSTGRES_DB}
     POSTGRES_USER: ${POSTGRES_USER}
@@ -54,6 +59,7 @@ x-airflow-common: &airflow-common
     - ./airflow/config:/opt/airflow/config
     - ./airflow/plugins:/opt/airflow/plugins
     - ./airflow/scripts:/opt/airflow/scripts
+    - ./airflow/output_global:/opt/airflow/output_global
   user: "${AIRFLOW_UID}:0"
   depends_on: &airflow-common-depends-on
     redis:
@@ -386,6 +392,11 @@ services:
       _AIRFLOW_WWW_USER_CREATE: "true"
       _AIRFLOW_WWW_USER_USERNAME: ${_AIRFLOW_WWW_USER_USERNAME}
       _AIRFLOW_WWW_USER_PASSWORD: ${_AIRFLOW_WWW_USER_PASSWORD}
+      EMAIL_YOUR: ${EMAIL_YOUR}
+      ADZUNA_APP_ID: ${ADZUNA_APP_ID_YOUR}
+      ADZUNA_APP_KEY: ${ADZUNA_APP_KEY_YOUR}
+      USAJOBS_API_KEY: ${USAJOBS_API_KEY_YOUR}
+      PYTHONPATH: /opt/airflow/project
     user: "0:0"
     networks:
       - app-network
