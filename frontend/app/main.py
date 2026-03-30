@@ -8,7 +8,6 @@ from config import PAGE_CONFIG, API_BASE_URL
 from styles import get_custom_css
 
 from utils.style_loader import apply_custom_styles  # ← ДОБАВИТЬ ЭТУ СТРОКУ
-
 # Применяем стили
 apply_custom_styles()
 # Настройка страницы
@@ -21,7 +20,6 @@ st.markdown(get_custom_css(), unsafe_allow_html=True)
 BASE_DIR = Path(__file__).parent.parent  # frontend/
 ASSETS_DIR = BASE_DIR / "assets"
 LOGO_PATH = ASSETS_DIR / "logo.png"
-
 # Инициализация session state
 if 'authenticated' not in st.session_state:
     st.session_state.authenticated = False
@@ -29,6 +27,7 @@ if 'user_data' not in st.session_state:
     st.session_state.user_data = {}
 if 'resume_data' not in st.session_state:
     st.session_state.resume_data = None
+    
 
 
 def render_header():
@@ -91,7 +90,6 @@ def render_sidebar():
         st.info("✅ API подключено")
         st.caption(f"Последнее обновление: {datetime.now().strftime('%H:%M:%S')}")
 
-
 def main():
     """Основная функция приложения"""
     render_header()
@@ -130,6 +128,7 @@ def main():
             st.switch_page("pages/04_📊_Analytics.py")
     
     # Недавняя активность
+    
     st.markdown("### 📈 Недавняя активность")
     st.markdown("""
         <div class='activity-section'>

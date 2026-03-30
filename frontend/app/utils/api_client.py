@@ -2,6 +2,7 @@
 Клиент для взаимодействия с FastAPI backend
 """
 
+import json
 import requests
 from typing import Dict, List, Optional, Any
 
@@ -57,6 +58,48 @@ class APIClient:
             f"{self.base_url}/api/v1/analysis/resume",
             json=profile,
             timeout=self.timeout,
+        )
+        response.raise_for_status()
+        return response.json()
+
+    # =========================================
+    # CHAT / MVP FLOW
+    # =========================================
+    def chat(
+        self,
+        message: str = "",
+        uploaded_file=None,
+        state: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """
+        Универсальный chat endpoint для MVP flow:
+        - search
+        - resume
+        - roadmap
+        - interview
+        """
+        state = state or {}
+
+        data = {
+            "message": message,
+            "state": json.dumps(state, ensure_ascii=False),
+        }
+
+        files = None
+        if uploaded_file is not None:
+            files = {
+                "file": (
+                    uploaded_file.name,
+                    uploaded_file.getvalue(),
+                    uploaded_file.type or "application/octet-stream",
+                )
+            }
+
+        response = self.session.post(
+            f"{self.base_url}/api/v1/chat",
+            data=data,
+            files=files,
+            timeout=120,
         )
         response.raise_for_status()
         return response.json()
@@ -145,5 +188,21 @@ class APIClient:
             params=params,
             timeout=self.timeout,
         )
+        response.raise_for_status()
+        return response.json()
+    
+    
+    def chat(self, message: str, state: dict):
+        import requests
+
+        response = requests.post(
+            f"{self.base_url}/api/v1/chat",
+            data={
+                "message": message,
+                "state": json.dumps(state, ensure_ascii=False),
+            },
+            timeout=120,
+        )
+
         response.raise_for_status()
         return response.json()

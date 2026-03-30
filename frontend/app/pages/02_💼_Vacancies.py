@@ -7,6 +7,15 @@ from utils.style_loader import apply_custom_styles
 apply_custom_styles()
 st.set_page_config(page_title="Вакансии", page_icon="💼", layout="wide")
 
+if "backend_state" not in st.session_state:
+    st.session_state.backend_state = {}
+
+if "vacancies_result" not in st.session_state:
+    st.session_state.vacancies_result = None
+
+if "chat_messages_seed" not in st.session_state:
+    st.session_state.chat_messages_seed = None
+
 st.markdown("""
 <style>
 input {
@@ -20,6 +29,27 @@ label {
 }
 </style>
 """, unsafe_allow_html=True)
+
+
+def run_vacancy_search(api_client: APIClient, profile: dict, search_query: str):
+    if search_query and search_query.strip():
+        message = f"search {search_query.strip()}"
+    elif profile:
+        specialization = profile.get("specialization", "")
+        skills = profile.get("skills", [])
+        skills_text = ", ".join(skills[:8]) if skills else ""
+        message = f"search {specialization} {skills_text}".strip()
+    else:
+        message = "search python developer"
+
+    result = api_client.chat(
+        message=message,
+        state=st.session_state.backend_state,
+    )
+
+    st.session_state.backend_state = result.get("state", {})
+    st.session_state.vacancies_result = result
+    return result
 
 
 def main():
@@ -49,38 +79,29 @@ def main():
 
     api_client = APIClient(API_BASE_URL)
 
+    search_clicked = st.button("🔍 Найти вакансии", use_container_width=True)
+    vacancies = []
+
     try:
-        with st.spinner("Загрузка вакансий..."):
-            selected_seniority = None
-            if experience != "Все":
-                selected_seniority = experience.lower()
-            elif profile.get("grade"):
-                selected_seniority = str(profile.get("grade")).lower()
+        if search_clicked or st.session_state.vacancies_result is None:
+            with st.spinner("Загрузка вакансий..."):
+                result = run_vacancy_search(api_client, profile, search_query)
 
-            response = api_client.get_jobs(
-                seniority=selected_seniority,
-                remote=True if location == "Удалённо" else None,
-                limit=20
-            )
-
-        if isinstance(response, dict):
-            vacancies = response.get("data", [])
-        elif isinstance(response, list):
-            vacancies = response
+                response = result.get("response", [])
+                vacancies = response if isinstance(response, list) else []
         else:
-            vacancies = []
-
-        if not isinstance(vacancies, list):
-            vacancies = []
+            cached_result = st.session_state.vacancies_result
+            response = cached_result.get("response", [])
+            vacancies = response if isinstance(response, list) else []
 
     except Exception as e:
         st.error(f"Ошибка загрузки вакансий: {e}")
         vacancies = []
 
-    # Нормализация данных для UI
     normalized_vacancies = []
-    for v in vacancies:
+    for backend_idx, v in enumerate(vacancies, start=1):
         item = dict(v)
+        item["backend_index"] = backend_idx
 
         if "company" not in item:
             item["company"] = item.get("company_name", "Не указано")
@@ -101,7 +122,6 @@ def main():
 
     vacancies = normalized_vacancies
 
-    # Фильтрация на фронте
     if search_query:
         q = search_query.lower().strip()
         vacancies = [
@@ -123,29 +143,105 @@ def main():
         reverse=True
     )
 
-    col1, col2, col3 = st.columns(3)
-    with col1:
+    metric_col1, metric_col2, metric_col3 = st.columns(3)
+    with metric_col1:
         st.metric("Всего вакансий", len(vacancies))
-    with col2:
+    with metric_col2:
         st.metric("Совпадения с ИИ", sum(1 for v in vacancies if v.get("final_score", 0) > 0.7))
-    with col3:
+    with metric_col3:
         avg_salary = 0
         if vacancies:
             salaries = []
             for v in vacancies:
                 if v.get("salary_from") and v.get("salary_to"):
                     salaries.append((v["salary_from"] + v["salary_to"]) / 2)
-
             if salaries:
                 avg_salary = sum(salaries) / len(salaries)
 
         st.metric("Средняя зарплата", f"{avg_salary:,.0f} ₽")
 
-    st.markdown("### Доступные позиции")
+    top_col1, top_col2 = st.columns(2)
+    with top_col1:
+        if st.button("🤖 Перейти в карьерный чат", use_container_width=True):
+            st.switch_page("pages/04_🎯_Interview_Simulator.py")
+    with top_col2:
+        if st.button("📄 Перейти к резюме", use_container_width=True):
+            st.switch_page("pages/01_📄_Resume_Upload.py")
 
     if vacancies:
-        for vacancy in vacancies:
+        st.markdown("### Доступные позиции")
+
+        for idx, vacancy in enumerate(vacancies, start=1):
             render_vacancy_card(vacancy)
+
+            action_col1, action_col2, action_col3 = st.columns(3)
+
+            with action_col1:
+                if st.button(f"Выбрать #{idx}", key=f"choose_vacancy_{idx}"):
+                    try:
+                        result = api_client.chat(
+                            message=str(vacancy["backend_index"]),
+                            state=st.session_state.backend_state,
+                        )
+                        st.session_state.backend_state = result.get("state", {})
+                        st.session_state.vacancies_result = result
+
+                        st.session_state.chat_messages_seed = [
+                            {"role": "user", "content": f"Я выбрал вакансию #{idx}"},
+                            {"role": "assistant", "content": result.get("response", "Вакансия выбрана.")},
+                        ]
+
+                        st.switch_page("pages/04_🎯_Interview_Simulator.py")
+
+                    except Exception as e:
+                        st.error(f"Ошибка выбора вакансии: {e}")
+
+            with action_col2:
+                if st.button(f"Roadmap #{idx}", key=f"roadmap_vacancy_{idx}"):
+                    try:
+                        selected = api_client.chat(
+                            message=str(vacancy["backend_index"]),
+                            state=st.session_state.backend_state,
+                        )
+                        st.session_state.backend_state = selected.get("state", {})
+
+                        result = api_client.chat(
+                            message="roadmap",
+                            state=st.session_state.backend_state,
+                        )
+                        st.session_state.backend_state = result.get("state", {})
+
+                        st.session_state.chat_messages_seed = [
+                            {"role": "user", "content": f"roadmap по вакансии #{idx}"},
+                            {"role": "assistant", "content": result.get("response", "Нет ответа от backend")},
+                        ]
+                        st.switch_page("app/pages/04_🎯_Interview_Simulator.py")
+                    except Exception as e:
+                        st.error(f"Ошибка roadmap: {e}")
+
+            with action_col3:
+                if st.button(f"Interview #{idx}", key=f"interview_vacancy_{idx}"):
+                    try:
+                        selected = api_client.chat(
+                            message=str(vacancy["backend_index"]),
+                            state=st.session_state.backend_state,
+                        )
+                        st.session_state.backend_state = selected.get("state", {})
+
+                        result = api_client.chat(
+                            message="interview",
+                            state=st.session_state.backend_state,
+                        )
+                        st.session_state.backend_state = result.get("state", {})
+
+                        st.session_state.chat_messages_seed = [
+                            {"role": "user", "content": f"interview по вакансии #{idx}"},
+                            {"role": "assistant", "content": result.get("response", "Нет ответа от backend")},
+                        ]
+                        st.switch_page("app/pages/04_🎯_Interview_Simulator.py")
+                    except Exception as e:
+                        st.error(f"Ошибка interview: {e}")
+
             st.markdown("---")
     else:
         st.warning("Не найдено вакансий, соответствующих вашим критериям")
