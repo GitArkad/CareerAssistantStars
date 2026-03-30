@@ -146,7 +146,21 @@ def task_load(**context) -> None:
     )
     ti.xcom_push(key="load_summary", value=summary)
 
-# Пересчитывает агрегаты
+# Обновляет слой job_skills для аналитики
+def task_refresh_job_skills(**context) -> None:
+    from src.aggregators.aggregate import run_refresh_job_skills_step
+
+    summary = run_refresh_job_skills_step()
+    context["ti"].xcom_push(key="job_skills_summary", value=summary)
+
+# Пересчитывает v2-аналитику для Streamlit
+def task_aggregate_v2(**context) -> None:
+    from src.aggregators.aggregate import run_aggregate_v2_step
+
+    summary = run_aggregate_v2_step()
+    context["ti"].xcom_push(key="aggregate_v2_summary", value=summary)
+
+# Пересчитывает старые агрегаты
 def task_aggregate(**context) -> None:
     from src.aggregators.aggregate import run_aggregate_step
 
@@ -161,7 +175,7 @@ def task_embed(**context) -> None:
 
 with DAG(
     dag_id="jobs_pipeline_weekly",
-    description="Jobs pipeline every 2 days: parallel parse -> collect -> clean -> load -> aggregate -> embed",
+    description="Jobs pipeline every 2 days: parallel parse -> collect -> clean -> load -> job_skills -> aggregate_v2 -> aggregate -> embed",
     default_args=DEFAULT_ARGS,
     start_date=datetime(2026, 3, 1),
     schedule=timedelta(days=2),
@@ -206,6 +220,18 @@ with DAG(
         retry_delay=timedelta(minutes=5),
     )
 
+    refresh_job_skills = PythonOperator(
+        task_id="refresh_job_skills",
+        python_callable=task_refresh_job_skills,
+        execution_timeout=timedelta(minutes=20),
+    )
+
+    aggregate_v2 = PythonOperator(
+        task_id="aggregate_v2",
+        python_callable=task_aggregate_v2,
+        execution_timeout=timedelta(minutes=30),
+    )
+
     aggregate = PythonOperator(
         task_id="aggregate",
         python_callable=task_aggregate,
@@ -218,4 +244,4 @@ with DAG(
         execution_timeout=timedelta(hours=2),
     )
 
-    parse_tasks >> collect >> clean >> load >> aggregate >> embed
+    parse_tasks >> collect >> clean >> load >> refresh_job_skills >> aggregate_v2 >> aggregate >> embed

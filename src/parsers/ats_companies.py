@@ -1,11 +1,3 @@
-"""
-ats_companies.py
-
-ATS company registry with health tracking.
-Permanent failures deactivate faster, temporary failures require repeated misses.
-Status persists to S3 with local fallback.
-"""
-
 from __future__ import annotations
 
 import json
@@ -55,15 +47,15 @@ _cache_lock = RLock()
 _TEMP_REASONS = ("timeout", "timed out", "503", "502", "500", "429", "connection", "temporary")
 _PERM_REASONS = ("404", "410", "invalid board", "not found")
 
-
+# Возвращает текущее время в UTC в ISO-формате
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
-
+# Приводит текст причины к единому виду
 def _normalize_reason(reason: str) -> str:
     return (reason or "unknown").strip().lower()
 
-
+# Определяет порог деактивации по типу ошибки
 def _threshold_for_reason(reason: str) -> int:
     rs = _normalize_reason(reason)
     if any(token in rs for token in _PERM_REASONS):
@@ -72,7 +64,7 @@ def _threshold_for_reason(reason: str) -> int:
         return 5
     return 3
 
-
+# Читает статус из S3, а при ошибке из локального файла
 def _read_remote_or_local() -> Dict[str, Dict[str, Dict[str, Any]]]:
     try:
         from src.loaders.s3_storage import get_bucket, get_s3_client
@@ -91,7 +83,7 @@ def _read_remote_or_local() -> Dict[str, Dict[str, Dict[str, Any]]]:
 
     return {}
 
-
+# Объединяет текущее и новое состояние без потери счетчиков ошибок
 def _merge_state(
     base: Dict[str, Dict[str, Dict[str, Any]]],
     incoming: Dict[str, Dict[str, Dict[str, Any]]],
@@ -119,7 +111,7 @@ def _merge_state(
 
     return merged
 
-
+# Загружает состояние в кэш при первом обращении
 def _load() -> Dict[str, Dict[str, Dict[str, Any]]]:
     global _cache
     with _cache_lock:
@@ -128,7 +120,7 @@ def _load() -> Dict[str, Dict[str, Dict[str, Any]]]:
         _cache = _read_remote_or_local()
         return _cache
 
-
+# Сохраняет состояние локально и в S3
 def _save() -> None:
     global _cache
     with _cache_lock:
@@ -157,7 +149,7 @@ def _save() -> None:
         except Exception as e:
             logger.warning("ATS status S3 save failed: %s", e)
 
-
+# Возвращает список активных компаний для платформы
 def get_active_companies(platform: str) -> List[str]:
     all_companies = _REGISTRY.get(platform, [])
     st = _load().get(platform, {})
@@ -167,7 +159,7 @@ def get_active_companies(platform: str) -> List[str]:
         logger.info("[%s] %s active, %s skipped", platform, len(active), skipped)
     return active
 
-
+# Увеличивает счетчик ошибок и при необходимости деактивирует компанию
 def mark_inactive(platform: str, company: str, reason: str = "unknown") -> None:
     st = _load()
     st.setdefault(platform, {})
@@ -192,7 +184,7 @@ def mark_inactive(platform: str, company: str, reason: str = "unknown") -> None:
     st[platform][company] = payload
     _save()
 
-
+# Сбрасывает ошибки после успешного запроса
 def record_success(platform: str, company: str) -> None:
     st = _load()
     if platform in st and company in st[platform]:
@@ -203,11 +195,11 @@ def record_success(platform: str, company: str) -> None:
         }
         _save()
 
-
+# Сбрасывает счетчик ошибок для компании
 def reset_fail_count(platform: str, company: str) -> None:
     record_success(platform, company)
 
-
+# Принудительно активирует компанию
 def mark_active(platform: str, company: str) -> None:
     st = _load()
     st.setdefault(platform, {})
@@ -219,7 +211,7 @@ def mark_active(platform: str, company: str) -> None:
     _save()
     logger.info("[%s] Reactivated '%s'", platform, company)
 
-
+# Возвращает сводку по активным и неактивным компаниям
 def get_status_summary() -> Dict[str, Dict[str, Any]]:
     st = _load()
     out: Dict[str, Dict[str, Any]] = {}

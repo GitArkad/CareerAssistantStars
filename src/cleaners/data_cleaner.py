@@ -1,9 +1,3 @@
-"""
-data_cleaner.py
-
-Полный пайплайн очистки, нормализации и enrichment вакансий.
-"""
-
 from __future__ import annotations
 
 import re
@@ -21,14 +15,11 @@ logger = logging.getLogger(__name__)
 try:
     from src.parsers.search_queries import ALL_QUERIES_COMBINED, CATEGORY_MAP
 except Exception:
-    ALL_QUERIES_COMBINED = []  # fallback: specialty parsing disabled if import fails
+    ALL_QUERIES_COMBINED = []  
     CATEGORY_MAP = {}
 
 
-# =====================================================================
 # Справочник навыков
-# =====================================================================
-
 EXTRACTABLE_SKILLS = {
     # Languages
     "python", "java", "javascript", "typescript", "scala", "go", "golang",
@@ -98,10 +89,7 @@ R_LANGUAGE_CONTEXT_PATTERNS = [
 ]
 
 
-# =====================================================================
-# [Пункт 15] Импликации навыков: если знаешь X, то Y тоже подразумевается
-# =====================================================================
-
+#  Импликации навыков: если знаешь X, то Y тоже подразумевается
 SKILL_IMPLIES = {
     "pandas": ["python"],
     "numpy": ["python"],
@@ -179,10 +167,7 @@ SKILL_IMPLIES = {
 }
 
 
-# =====================================================================
 # Карта синонимов навыков -> каноническое имя
-# =====================================================================
-
 SKILL_SYNONYMS = {
     # --- Programming Languages ---
     "python": "Python", "py": "Python", "python3": "Python",
@@ -410,11 +395,7 @@ SKILL_SYNONYMS = {
     "node.js": "Node.js", "nodejs": "Node.js", "нода": "Node.js", "ноджс": "Node.js",
 }
 
-
-# =====================================================================
 # Символы / слова валют
-# =====================================================================
-
 CURRENCY_SYMBOLS = {
     "c$": "CAD", "a$": "AUD", "s$": "SGD", "hk$": "HKD",
     "us$": "USD", "£": "GBP", "€": "EUR", "$": "USD",
@@ -441,6 +422,7 @@ CURRENCY_NORMALIZATION = {
     "HK$": "HKD", "NIS": "ILS",
 }
 
+# Нормализует код валюты к единому формату
 def _normalize_currency_code(cur: Optional[str]) -> Optional[str]:
     if _is_missing(cur):
         return None
@@ -448,10 +430,7 @@ def _normalize_currency_code(cur: Optional[str]) -> Optional[str]:
     return CURRENCY_NORMALIZATION.get(c, c)
 
 
-# =====================================================================
-# [Пункт 9] Карта стран
-# =====================================================================
-
+# Карта стран
 _COUNTRY_MAP = {
     "РОССИЯ": "RUSSIA",
     "RUSSIA": "RUSSIA",
@@ -619,11 +598,7 @@ LOCATION_NOISE_WORDS = {
     "nan", "none", "null", "n/a",
 }
 
-
-# =====================================================================
-# [Пункт 2-3] Определение страны по компании (fallback)
-# =====================================================================
-
+# Определение страны по компании (fallback)
 COMPANY_COUNTRY_MAP = {
     "airbnb": "UNITED STATES",
     "andurilindustries": "UNITED STATES",
@@ -649,11 +624,7 @@ COMPANY_COUNTRY_MAP = {
     "kayzen": "GERMANY",
 }
 
-
-# =====================================================================
-# [Пункт 9] Русские города -> English
-# =====================================================================
-
+# Русские города -> English
 RU_CITY_TO_EN = {
     # --- Россия / СНГ ---
     "москва": "MOSCOW",
@@ -890,10 +861,7 @@ US_STATES = {
 }
 
 
-# =====================================================================
-# [Пункт 8] Fallback URL для источников без прямых ссылок
-# =====================================================================
-
+# Fallback URL для источников без прямых ссылок
 SOURCE_FALLBACK_URLS = {
     "arbeitnow.com": "https://www.arbeitnow.com",
 }
@@ -946,8 +914,6 @@ COUNTRY_DEFAULT_CURRENCY = {
     "BULGARIA": "BGN",
 }
 
-# Здесь оставляем только те значения, за которые ты готова отвечать.
-# Для неподтверждённых валют лучше None/отсутствие, чем ложная конвертация.
 FALLBACK_TO_RUB_RATES = {
     "RUB": 1.0,
     "USD": 82.1314,
@@ -974,8 +940,6 @@ FALLBACK_TO_RUB_RATES = {
     "UZS": 0.00674321,
     "NZD": 47.6609,
     "HKD": 10.5162,
-    # MXN / ILS / CZK / HUF / RON / BGN / ZAR добавь из своего exchange-rate feed,
-    # когда заведёшь единый официальный источник.
 }
 
 MONTHLY_BOUNDS = {
@@ -1006,10 +970,7 @@ MONTHLY_BOUNDS = {
     "HKD": (8_000, 300_000),
 }
 
-# =====================================================================
-# Seniority
-# =====================================================================
-
+# Позиция
 SENIORITY_MAP = {
     "intern": "intern", "trainee": "intern", "стажер": "intern", "стажёр": "intern",
     "junior": "junior", "jr ": "junior", "jr.": "junior", "entry level": "junior",
@@ -1024,11 +985,6 @@ SENIORITY_MAP = {
     "manager": "manager", "руководитель": "manager", "head of": "manager",
     "director": "director", "директор": "director", "vp ": "director",
 }
-
-
-# =====================================================================
-# Role families
-# =====================================================================
 
 _ROLE_FAMILIES = {
     "data_scientist": ["data scientist", "дата сайентист", "ученый по данным"],
@@ -1099,11 +1055,7 @@ DEPARTMENT_RULES = {
     ],
 }
 
-
-# =====================================================================
-# [Пункт 5] Паттерн для удаления эмодзи
-# =====================================================================
-
+# удаление эмодзи
 EMOJI_PATTERN = re.compile(
     "["
     "\U0001F600-\U0001F64F"  # emoticons
@@ -1124,28 +1076,20 @@ EMOJI_PATTERN = re.compile(
     flags=re.UNICODE,
 )
 
-
-# =====================================================================
-# [Пункт 16] Допустимые значения source для валидации строк
-# =====================================================================
-
+# Допустимые значения source для валидации строк
 VALID_SOURCES = {
     "hh.ru", "greenhouse.com", "lever.co", "ashbyhq.com",
     "adzuna.com", "usajobs.gov", "arbeitnow.com", "himalayas.app",
     "unknown",
 }
 
-
-# =====================================================================
-# Утилиты
-# =====================================================================
-
+# Проверяет, что значение пустое или служебное
 def _is_missing(value) -> bool:
     return value is None or (isinstance(value, float) and pd.isna(value)) or str(value).strip().lower() in {
         "", "nan", "none", "null"
     }
 
-
+# Векторно проверяет пустые значения в серии pandas
 def _is_missing_series(series: pd.Series) -> pd.Series:
     """Vectorized version of _is_missing for DataFrame columns."""
     return (
@@ -1153,13 +1097,13 @@ def _is_missing_series(series: pd.Series) -> pd.Series:
         | series.astype(str).str.strip().str.lower().isin({"", "nan", "none", "null"})
     )
 
-
+# Безопасно приводит значение к строке для составного ключа
 def _safe_key_part(value) -> str:
     if _is_missing(value):
         return ""
     return str(value).strip()
 
-
+# Очищает текст от HTML, лишних пробелов и эмодзи
 def _clean_text(value, strip_html_tags: bool = False, remove_emoji: bool = False) -> Optional[str]:
     if _is_missing(value):
         return None
@@ -1194,7 +1138,7 @@ def _clean_text(value, strip_html_tags: bool = False, remove_emoji: bool = False
     text = re.sub(r"\s+", " ", text).strip()
     return text or None
 
-
+# Преобразует строковое представление массива в список
 def _parse_pg_array(val) -> List[str]:
     if isinstance(val, list):
         return [str(x).strip() for x in val if str(x).strip()]
@@ -1228,12 +1172,12 @@ def _parse_pg_array(val) -> List[str]:
         return [s.strip().strip('"').strip("'") for s in inner.split(",") if s.strip()]
     return [s.strip().strip('"').strip("'") for s in val.split(",") if s.strip()]
 
-
+# Преобразует список в JSON-строку
 def _to_pg_array(items: List[str]) -> str:
     clean = [str(x).strip() for x in items if str(x).strip()]
     return json.dumps(clean, ensure_ascii=False)
 
-
+# Преобразует строку с числом в float
 def _parse_number(s: str) -> Optional[float]:
     if _is_missing(s):
         return None
@@ -1253,34 +1197,26 @@ def _parse_number(s: str) -> Optional[float]:
     elif s.endswith("m"):
         multiplier = 1_000_000.0
         s = s[:-1]
-
-    # Если есть и запятая, и точка — считаем, что запятая = thousand sep
     if "," in s and "." in s:
         s = s.replace(",", "")
     else:
-        # если только запятая и она похожа на thousand sep
         if "," in s:
             parts = s.split(",")
             if len(parts) > 1 and all(len(p) == 3 for p in parts[1:]):
                 s = "".join(parts)
             else:
                 s = s.replace(",", ".")
-
     try:
         val = float(s)
     except ValueError:
         return None
 
-    # защита от мусора типа 160,000K -> 160000, а не 160000000
     if multiplier == 1000.0 and val >= 1000:
         return val
 
     return val * multiplier
 
-# =====================================================================
 # Извлечение навыков
-# =====================================================================
-
 SKILL_ALIASES_REGEX = {
     "node.js": [
         re.compile(r"(?<!\w)node(?:\.?\s*js)(?!\w)", re.I),
@@ -1308,6 +1244,7 @@ SKILL_ALIASES_REGEX = {
     ],
 }
 
+# Строит регулярное выражение для поиска навыка
 def _build_skill_regex(skill: str) -> re.Pattern:
     escaped = re.escape(skill).replace(r"\ ", r"\s+")
     return re.compile(rf"(?<![A-Za-z0-9_+#.-]){escaped}(?![A-Za-z0-9_+#.-])", re.I)
@@ -1318,6 +1255,7 @@ SKILL_REGEXES = {
     if skill != "r"  # R обрабатываем отдельно
 }
 
+# Извлекает навыки из текста вакансии
 def extract_skills_from_text(text: str) -> List[str]:
     if not text:
         return []
@@ -1333,7 +1271,6 @@ def extract_skills_from_text(text: str) -> List[str]:
         if any(p.search(t) for p in patterns):
             found.add(skill)
 
-    # R — только контекстно
     if any(re.search(pattern, t, flags=re.I) for pattern in R_LANGUAGE_CONTEXT_PATTERNS):
         found.add("r")
 
@@ -1345,7 +1282,7 @@ def extract_skills_from_text(text: str) -> List[str]:
 
     return sorted(found)
 
-
+# Нормализует навыки к каноническим именам
 def normalize_skills(raw_skills: List[str]) -> List[str]:
     normalized = set()
     for skill in raw_skills:
@@ -1354,6 +1291,7 @@ def normalize_skills(raw_skills: List[str]) -> List[str]:
         normalized.add(canonical)
     return sorted(normalized)
 
+# Нормализует департамент по полю и тексту вакансии
 def normalize_department(department: str, title: str = "", description: str = "") -> Optional[str]:
     dep = str(department or "").strip()
     if dep:
@@ -1367,10 +1305,6 @@ def normalize_department(department: str, title: str = "", description: str = ""
 
     return dep if dep else None
 
-# =====================================================================
-# Зарплата
-# =====================================================================
-
 SALARY_NUMBER_RE = r"\d[\d\s,._]*(?:\.\d+)?(?:\s*[kKmM])?"
 CURRENCY_TOKEN_RE = (
     r"(?:c\$|a\$|s\$|hk\$|us\$|£|€|\$|₽|₹|zł|₴|₸|¥|₩|₪|₺|"
@@ -1378,6 +1312,7 @@ CURRENCY_TOKEN_RE = (
     r"JPY|KRW|CNY|RMB|BRL|MXN|ILS|NIS|TRY|AED|CHF|SEK|NOK|DKK|NZD|CZK|RON|HUF|BGN|ZAR)"
 )
 
+# Определяет период зарплаты по тексту
 def _extract_period_hint(text: str) -> Optional[str]:
     if not text:
         return None
@@ -1401,6 +1336,7 @@ def _extract_period_hint(text: str) -> Optional[str]:
             return period
     return None
 
+# Преобразует валютный токен в код валюты
 def _currency_from_token(token: Optional[str]) -> Optional[str]:
     if not token:
         return None
@@ -1417,6 +1353,7 @@ def _currency_from_token(token: Optional[str]) -> Optional[str]:
     token_up = token.upper()
     return _normalize_currency_code(token_up)
 
+# Извлекает зарплату, валюту и период из текста
 def extract_salary_from_text(text: str) -> Tuple[Optional[float], Optional[float], Optional[str], Optional[str]]:
     if not text:
         return None, None, None, None
@@ -1472,19 +1409,16 @@ def extract_salary_from_text(text: str) -> Tuple[Optional[float], Optional[float
 
     return None, None, None, period
 
-
+# Определяет валюту по символам и словам в тексте
 def detect_currency_from_text(text: str) -> Optional[str]:
     if not text:
         return None
 
     txt = str(text)
     txt_lower = txt.lower()
-
-    # сначала длинные символы/токены
     for sym in sorted(CURRENCY_SYMBOLS.keys(), key=len, reverse=True):
         if sym.lower() in txt_lower:
             code = CURRENCY_SYMBOLS[sym]
-            # ¥ может означать и JPY, и CNY — уточняем по словам
             if sym == "¥":
                 if re.search(r"\b(cny|rmb|yuan)\b", txt_lower):
                     return "CNY"
@@ -1497,17 +1431,14 @@ def detect_currency_from_text(text: str) -> Optional[str]:
 
     return None
 
-
+# Грубо оценивает реальный период зарплаты по сумме
 def _guess_real_period(amount: float, currency: str) -> str:
     """Эвристика: определяем реальный период по величине суммы."""
     cur = (currency or "USD").upper()
     lo, hi = MONTHLY_BOUNDS.get(cur, (300, 120_000))
-
     if amount < lo:
-        # Слишком мало для месяца → скорее всего часовая
         return "hour"
     elif amount > hi:
-        # Слишком много для месяца → скорее всего годовая
         return "year"
     else:
         return "month"
@@ -1521,9 +1452,11 @@ PERIOD_MULTIPLIERS = {
     "year": 1.0 / 12.0,
 }
 
+# Переводит сумму в месячный эквивалент
 def _to_monthly(amount: float, period: str) -> float:
     return amount * PERIOD_MULTIPLIERS.get(period, 1.0)
 
+# Считает отклонение суммы от допустимого месячного диапазона
 def _monthly_fit_score(monthly_amount: float, currency: str) -> float:
     cur = _normalize_currency_code(currency) or "USD"
     lo, hi = MONTHLY_BOUNDS.get(cur, (800, 50_000))
@@ -1536,6 +1469,7 @@ def _monthly_fit_score(monthly_amount: float, currency: str) -> float:
 
     return (monthly_amount - hi) / max(hi, 1)
 
+# Выбирает наиболее вероятный период зарплаты
 def _choose_best_period(amount: float, currency: str, period_hint: Optional[str]) -> str:
     candidates = ["hour", "day", "week", "month", "year"]
 
@@ -1548,7 +1482,6 @@ def _choose_best_period(amount: float, currency: str, period_hint: Optional[str]
         monthly_val = _to_monthly(amount, p)
         score = _monthly_fit_score(monthly_val, currency)
 
-        # небольшой бонус периоду из исходного текста
         if p == period_hint:
             score -= 0.05
 
@@ -1558,7 +1491,7 @@ def _choose_best_period(amount: float, currency: str, period_hint: Optional[str]
 
     return best_period
 
-
+# Приводит зарплату к месячному формату
 def normalize_salary_to_monthly(sal_from, sal_to, currency, period) -> Tuple[Optional[float], Optional[float]]:
     if pd.isna(sal_from) and pd.isna(sal_to):
         return sal_from, sal_to
@@ -1589,7 +1522,7 @@ def normalize_salary_to_monthly(sal_from, sal_to, currency, period) -> Tuple[Opt
 
     return new_from, new_to
 
-
+# Проверяет и очищает границы месячной зарплаты
 def _sanitize_monthly_salary_bounds(
     sal_from: Optional[float],
     sal_to: Optional[float],
@@ -1634,10 +1567,7 @@ def _sanitize_monthly_salary_bounds(
     return clean_from, clean_to
 
 
-# =====================================================================
-# Seniority / experience
-# =====================================================================
-
+# Определяет seniority по заголовку и описанию
 def detect_seniority(title: str = "", description: str = "", experience: str = "") -> str:
     for text in [experience, title, description[:300]]:
         if not text:
@@ -1648,7 +1578,7 @@ def detect_seniority(title: str = "", description: str = "", experience: str = "
                 return level
     return "unknown"
 
-
+# Извлекает годы опыта из текста
 def _extract_years_from_text(text: str) -> Tuple[Optional[float], Optional[float]]:
     if not text:
         return None, None
@@ -1669,10 +1599,8 @@ def _extract_years_from_text(text: str) -> Tuple[Optional[float], Optional[float
             return (float(g[0]), float(g[1])) if len(g) == 2 else (float(g[0]), float(g[0]))
 
     return None, None
-# =====================================================================
-# Employment / Remote
-# =====================================================================
 
+# Нормализует тип занятости
 def normalize_employment_type(val: str, description: str = "") -> str:
     if not val and not description:
         return "unknown"
@@ -1694,7 +1622,7 @@ def normalize_employment_type(val: str, description: str = "") -> str:
             return canonical
     return "unknown"
 
-
+# Определяет формат работы: remote, hybrid или office
 def detect_remote_type(title: str = "", description: str = "", remote_flag=None, location: str = "") -> str:
     text = f"{title or ''} {(description or '')[:800]} {location or ''}".lower()
 
@@ -1732,10 +1660,7 @@ def detect_remote_type(title: str = "", description: str = "", remote_flag=None,
     return "unknown"
 
 
-# =====================================================================
-# [Пункт 1, 13] Location → city + country
-# =====================================================================
-
+# Пытается определить страну по тексту
 def _extract_country_from_haystack(text: str) -> Optional[str]:
     if _is_missing(text):
         return None
@@ -1767,11 +1692,13 @@ def _extract_country_from_haystack(text: str) -> Optional[str]:
 
     return None
 
+# Убирает служебные префиксы из location
 def _strip_location_prefix(text: str) -> str:
     text = re.sub(r"(?i)^(remote|hybrid|onsite|on-site)\s*[-–—,:/|]\s*", "", text).strip()
     text = re.sub(r"(?i)\b(remote|hybrid|onsite|on-site)\b\s*$", "", text).strip(" -–—,;/|")
     return text.strip()
 
+# Разбирает location на город и страну
 def _parse_location_parts(location: str) -> Tuple[Optional[str], Optional[str]]:
     if _is_missing(location):
         return None, None
@@ -1783,8 +1710,6 @@ def _parse_location_parts(location: str) -> Tuple[Optional[str], Optional[str]]:
         return None, None
 
     country = _extract_country_from_haystack(text)
-
-    # берём только первый location-cluster
     first_chunk = re.split(r"[;|/]", text, maxsplit=1)[0].strip()
     first_chunk = re.split(r"\s+\bor\b\s+", first_chunk, maxsplit=1, flags=re.I)[0].strip()
 
@@ -1810,6 +1735,7 @@ def _parse_location_parts(location: str) -> Tuple[Optional[str], Optional[str]]:
 
     return city, country
 
+# Определяет страну по полям вакансии и fallback-правилам
 def infer_country(country, location, source: str = "", description: str = "", company_name: str = "") -> Optional[str]:
     # 1. Явная страна из source
     if not _is_missing(country):
@@ -1821,10 +1747,6 @@ def infer_country(country, location, source: str = "", description: str = "", co
         from_location = _extract_country_from_haystack(location)
         if from_location:
             return from_location
-
-        # ВАЖНО:
-        # если location есть, но не распарсилась, НЕ подставляем страну компании
-        # иначе "China" легко превращается в "USA"
         return None
 
     # 3. Только если location вообще нет — можно смотреть description
@@ -1841,7 +1763,7 @@ def infer_country(country, location, source: str = "", description: str = "", co
 
     return None
 
-
+# Нормализует название города
 def normalize_city_name(city: Optional[str]) -> Optional[str]:
     """Нормализует город: русский → английский, всё в UPPER CASE."""
     if not city:
@@ -1857,6 +1779,7 @@ def normalize_city_name(city: Optional[str]) -> Optional[str]:
         return en_name
     return c.upper()
 
+# Определяет язык публикации вакансии
 def detect_posting_language(text: str) -> str:
     """Определяет язык текста вакансии. Дефолт — English."""
     if not text:
@@ -1870,39 +1793,27 @@ def detect_posting_language(text: str) -> str:
         return "Russian"
     return "English"
 
-# =====================================================================
-# [Пункт 4] Нормализация title
-# =====================================================================
-
+# Нормализует title для поиска и агрегаций
 def normalize_title(title: str, company_name: str = "") -> Optional[str]:
     """Нормализует title для downstream агрегаций и эмбеддингов."""
     if not title:
         return None
     t = title.strip()
-
-    # Убираем company_name из title, если оно туда попало.
     if company_name:
         cn = company_name.strip()
-        # "Title | Company" or "Company | Title"
         if f" | {cn}" in t:
             t = t.replace(f" | {cn}", "").strip()
         elif f"{cn} | " in t:
             t = t.replace(f"{cn} | ", "").strip()
-        # " at Company"
         if t.lower().endswith(f" at {cn.lower()}"):
             t = t[: -(len(cn) + 4)].strip()
 
-    # Lowercase для агрегации.
     t = t.lower().strip()
     t = re.sub(r"[^a-zа-яё0-9\s+#.]", " ", t)
     t = re.sub(r"\s+", " ", t).strip()
     return t or None
 
-
-# =====================================================================
-# Dedupe key
-# =====================================================================
-
+# Строит ключ для дедупликации вакансий
 def _dedupe_key(row):
     source = _safe_key_part(row.get("source"))
     source_job_id = _safe_key_part(row.get("source_job_id"))
@@ -1920,9 +1831,6 @@ def _dedupe_key(row):
     return f"title::{source}::{company}::{title}"
 
 
-# -----------------------------------------------------------------
-# Безопасное извлечение опыта: только candidate-experience context
-# -----------------------------------------------------------------
 
 MAX_REASONABLE_YEARS = 25
 
@@ -1970,7 +1878,7 @@ _STRONG_POSITIVE_HINTS = [
     r"\bhands[- ]on\b",
 ]
 
-
+# Безопасно извлекает опыт только из релевантного контекста
 def _extract_years_from_text_safe(text: str) -> Tuple[Optional[int], Optional[int]]:
     if not text:
         return None, None
@@ -1981,17 +1889,13 @@ def _extract_years_from_text_safe(text: str) -> Tuple[Optional[int], Optional[in
         m = re.search(pat, txt, flags=re.I | re.S)
         if not m:
             continue
-
         nums = [int(g) for g in m.groups() if g is not None]
         if not nums:
             continue
-
         if len(nums) == 1:
             y1 = y2 = nums[0]
         else:
             y1, y2 = nums[0], nums[1]
-
-        # sanity bounds
         if y1 <= 0 or y2 <= 0:
             continue
         if y1 > MAX_REASONABLE_YEARS or y2 > MAX_REASONABLE_YEARS:
@@ -2002,8 +1906,6 @@ def _extract_years_from_text_safe(text: str) -> Tuple[Optional[int], Optional[in
 
         negative = any(re.search(p, window, flags=re.I) for p in _NEGATIVE_EXPERIENCE_CONTEXT)
         positive = any(re.search(p, window, flags=re.I) for p in _STRONG_POSITIVE_HINTS)
-
-        # company-history context without clear requirement context -> ignore
         if negative and not positive:
             continue
 
@@ -2011,10 +1913,8 @@ def _extract_years_from_text_safe(text: str) -> Tuple[Optional[int], Optional[in
 
     return None, None
 
-
+# Извлекает опыт из приоритетных текстовых полей строки
 def _extract_years_from_row(row) -> pd.Series:
-    # Самый высокий приоритет у requirement-полей,
-    # description идёт последним, потому что там чаще всего маркетинговый текст про компанию.
     texts = [
         str(row.get("requirements") or ""),
         str(row.get("nice_to_have") or ""),
@@ -2022,7 +1922,6 @@ def _extract_years_from_row(row) -> pd.Series:
         str(row.get("title") or ""),
         str(row.get("description") or ""),
     ]
-
     for text in texts:
         y1, y2 = _extract_years_from_text_safe(text)
         if y1 is not None:
@@ -2036,7 +1935,7 @@ def _extract_years_from_row(row) -> pd.Series:
         "years_experience_max": None,
     })
 
-
+# Собирает текстовое представление опыта
 def _experience_to_text(row) -> str:
 
     y1 = row.get("years_experience_min")
@@ -2049,7 +1948,7 @@ def _experience_to_text(row) -> str:
 
     return "нет данных"
 
-
+# Нормализует текст специальности для сопоставления
 def _normalize_specialty_text(text: str) -> str:
     text = str(text or "").lower().strip()
     text = re.sub(r"[^a-zа-яё0-9+#./\-\s]", " ", text, flags=re.I)
@@ -2087,14 +1986,12 @@ if not _SPECIALTY_QUERY_KEYS:
             _SPECIALTY_QUERY_DISPLAY[key] = q
     _SPECIALTY_QUERY_KEYS = sorted(_SPECIALTY_QUERY_DISPLAY.keys(), key=len, reverse=True)
 
-
+# Определяет специальность по title
 def extract_specialty_from_title(title: str) -> Optional[str]:
     if _is_missing(title):
         return None
 
     t = _normalize_specialty_text(title)
-
-    # 1. Сначала точные совпадения из search_queries.py
     for query_key in _SPECIALTY_QUERY_KEYS:
         escaped_query = re.escape(query_key)
         escaped_query = escaped_query.replace(r"\ ", r"\s+")
@@ -2104,7 +2001,6 @@ def extract_specialty_from_title(title: str) -> Optional[str]:
         if re.search(regex, t, flags=re.I):
             return _SPECIALTY_QUERY_DISPLAY[query_key]
 
-    # 2. Более точные fallback-паттерны
     specific_patterns = [
         (r"\bfinancial analyst\b", "Financial Analyst"),
         (r"\bbusiness analyst\b", "Business Analyst"),
@@ -2124,7 +2020,6 @@ def extract_specialty_from_title(title: str) -> Optional[str]:
         if re.search(pat, t, flags=re.I):
             return label
 
-    # 3. Только потом общие fallback
     if re.search(r"\banalyst\b", t, flags=re.I):
         return "Analyst"
     if re.search(r"\bengineer\b", t, flags=re.I):
@@ -2142,7 +2037,7 @@ def extract_specialty_from_title(title: str) -> Optional[str]:
 
     return None
 
-
+# Определяет семейство роли по заголовку вакансии
 def _detect_role_family(title: str) -> str:
     if _is_missing(title):
         return "other"
@@ -2153,6 +2048,7 @@ def _detect_role_family(title: str) -> str:
             return family
     return "other"
 
+# Очищает, нормализует и обогащает датафрейм вакансий
 def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     initial = len(df)
     logger.info("Cleaning: %s rows", initial)
@@ -2178,9 +2074,7 @@ def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
         if col not in df.columns:
             df[col] = "[]"
 
-    # -----------------------------------------------------------------
     # Удаление мусорных колонок
-    # -----------------------------------------------------------------
     cols_to_drop = [c for c in df.columns if c.startswith("Unnamed")]
     for c in [
         "experience_level", "industry", "company_size", "education", "certifications",
@@ -2191,9 +2085,7 @@ def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
 
     df = df.drop(columns=[c for c in cols_to_drop if c in df.columns], errors="ignore")
 
-    # -----------------------------------------------------------------
     # Валидация source
-    # -----------------------------------------------------------------
     if "source" in df.columns:
         valid_mask = df["source"].apply(
             lambda s: not _is_missing(s) and str(s).strip().lower() in VALID_SOURCES
@@ -2203,15 +2095,13 @@ def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
             logger.warning("Dropping %s rows with invalid 'source' (column shift detected)", bad_rows)
             df = df[valid_mask].copy()
 
-    # -----------------------------------------------------------------
+
     # Дедупликация
-    # -----------------------------------------------------------------
     df["_dedupe_key"] = df.apply(_dedupe_key, axis=1)
     df = df.drop_duplicates(subset=["_dedupe_key"], keep="first")
 
-    # -----------------------------------------------------------------
+
     # Очистка текстовых полей
-    # -----------------------------------------------------------------
     if "title" in df.columns:
         df["title"] = df["title"].apply(_clean_text)
         df = df.dropna(subset=["title"])
@@ -2231,7 +2121,7 @@ def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
         if col in df.columns:
             df[col] = df[col].apply(_clean_text)
 
-    # Сохраняем title как человекочитаемый, а для агрегатов создаём отдельный normalized столбец.
+
     df["title_normalized"] = df.apply(
         lambda r: normalize_title(str(r.get("title") or ""), str(r.get("company_name") or "")),
         axis=1,
@@ -2260,16 +2150,12 @@ def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
                 ),
                 axis=1,
             )
-    # -----------------------------------------------------------------
-    # Опыт — считаем РАНЬШЕ удаления requirements/responsibilities/nice_to_have
-    # -----------------------------------------------------------------
+
     years = df.apply(_extract_years_from_row, axis=1)
     df["years_experience_min"] = years["years_experience_min"]
     df["years_experience_max"] = years["years_experience_max"]
 
-    # -----------------------------------------------------------------
-    # Санитарная отсечка абсурдного опыта
-    # -----------------------------------------------------------------
+
     mask_bad_exp = (
         (df["years_experience_min"].notna() & (df["years_experience_min"] > MAX_REASONABLE_YEARS))
         | (df["years_experience_max"].notna() & (df["years_experience_max"] > MAX_REASONABLE_YEARS))
@@ -2281,9 +2167,7 @@ def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
         logger.info("Resetting suspicious experience values for %s rows", int(mask_bad_exp.sum()))
         df.loc[mask_bad_exp, ["years_experience_min", "years_experience_max"]] = [None, None]
 
-    # -----------------------------------------------------------------
-    # Навыки
-    # -----------------------------------------------------------------
+
     logger.info("Extracting skills from selected source columns...")
 
     skill_text_cols = [
@@ -2309,6 +2193,7 @@ def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
 
     parsed_array_cols = [f"_{col}_parsed" for col in skill_array_cols]
 
+    # Объединяет навыки из разных источников строки
     def _merge_skill_sources(row):
         merged = []
         merged.extend(row.get("_text_skills", []))
@@ -2346,9 +2231,6 @@ def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     )
     df.drop(columns=drop_cols, inplace=True, errors="ignore")
 
-    # -----------------------------------------------------------------
-    # Department / seniority
-    # -----------------------------------------------------------------
     df["department"] = df.apply(
         lambda r: normalize_department(
             r.get("department"),
@@ -2367,9 +2249,7 @@ def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
         axis=1,
     )
 
-    # -----------------------------------------------------------------
-    # Зарплата
-    # -----------------------------------------------------------------
+    # Безопасно извлекает зарплату из текста описания
     def extract_salary_from_text_safe(text: str):
         """
         Возвращает:
@@ -2425,6 +2305,7 @@ def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
 
         return None, None, None, None, None
 
+    # Заполняет и нормализует зарплатные поля строки
     def _fix_salary(row) -> pd.Series:
         sal_from = row.get("salary_from")
         sal_to = row.get("salary_to")
@@ -2467,6 +2348,7 @@ def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     df["currency"] = salary_fixed["currency"]
     df["salary_text_raw"] = salary_fixed["salary_text_raw"]
 
+    # Собирает текстовое представление зарплаты
     def _salary_to_text(row) -> str:
         sf = row.get("salary_from")
         st = row.get("salary_to")
@@ -2486,9 +2368,6 @@ def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     df["salary_text"] = df.apply(_salary_to_text, axis=1)
     df["experience_text"] = df.apply(_experience_to_text, axis=1)
 
-    # -----------------------------------------------------------------
-    # Remote type
-    # -----------------------------------------------------------------
     df["remote_type"] = df.apply(
         lambda r: detect_remote_type(
             str(r.get("title") or ""),
@@ -2500,9 +2379,7 @@ def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     )
     df["remote"] = df["remote_type"].isin(["remote", "hybrid"])
 
-    # -----------------------------------------------------------------
-    # Location → city + country
-    # -----------------------------------------------------------------
+
     loc_parsed = df["location"].apply(_parse_location_parts)
     df["_parsed_city"] = loc_parsed.apply(lambda x: x[0])
     df["_parsed_country"] = loc_parsed.apply(lambda x: x[1])
@@ -2520,7 +2397,6 @@ def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
 
     df["city"] = df["_parsed_city"].apply(normalize_city_name)
 
-    # По твоей логике: страны оставляем, города удаляем для remote.
     mask_remote = df["remote_type"] == "remote"
     df.loc[mask_remote, "city"] = None
 
@@ -2536,9 +2412,6 @@ def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     if "country" in df.columns:
         df["country"] = df["country"].apply(lambda x: x.upper() if isinstance(x, str) else x)
 
-    # -----------------------------------------------------------------
-    # Валюта
-    # -----------------------------------------------------------------
     if "currency" in df.columns:
         df["currency"] = df["currency"].apply(_normalize_currency_code)
 
@@ -2557,9 +2430,8 @@ def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     no_salary = ~has_salary
     if no_salary.any():
         df.loc[no_salary, "currency"] = None
-# -----------------------------------------------------------------
-    # RUB-конвертация
-    # -----------------------------------------------------------------
+
+    # Конвертирует сумму в рубли по fallback-курсу
     def _convert_to_rub(amount, currency):
         if pd.isna(amount) or _is_missing(currency):
             return None
@@ -2573,6 +2445,7 @@ def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
             return None
         return round(amount * rate)
 
+    # Проверяет и очищает числовое значение зарплаты
     def _sanitize_salary_number(value):
         if pd.isna(value):
             return None
@@ -2580,16 +2453,13 @@ def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
             v = float(value)
         except (TypeError, ValueError):
             return None
-
         if v < 0:
             return None
-
-        # защита от явного мусора
         if v > 10_000_000_000:
             return None
-
         return round(v)
 
+    # Проверяет и исправляет диапазон зарплаты
     def _sanitize_salary_range(row) -> pd.Series:
         sf = row.get("salary_from")
         st = row.get("salary_to")
@@ -2633,7 +2503,6 @@ def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
             "salary_to": round(st) if st is not None else None,
         })
 
-    # жёсткая гарантия наличия колонок
     required_after_clean = [
         "salary_from",
         "salary_to",
@@ -2644,17 +2513,14 @@ def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
         if col not in df.columns:
             df[col] = None
 
-    # сначала чистим исходные salary-поля
     for col in ["salary_from", "salary_to"]:
         df[col] = df[col].apply(_sanitize_salary_number)
         df[col] = pd.to_numeric(df[col], errors="coerce")
 
-    # потом чиним диапазоны
     salary_sane = df.apply(_sanitize_salary_range, axis=1)
     df["salary_from"] = salary_sane["salary_from"]
     df["salary_to"] = salary_sane["salary_to"]
 
-    # теперь считаем RUB уже по исправленным salary
     df["salary_from_rub"] = df.apply(
         lambda r: _convert_to_rub(r.get("salary_from"), r.get("currency")), axis=1
     )
@@ -2662,7 +2528,6 @@ def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
         lambda r: _convert_to_rub(r.get("salary_to"), r.get("currency")), axis=1
     )
 
-    # финальная нормализация numeric
     for col in ["salary_from_rub", "salary_to_rub"]:
         df[col] = pd.to_numeric(df[col], errors="coerce")
 
@@ -2671,9 +2536,6 @@ def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     )
     logger.info("Converted %s salary rows to RUB (fallback rates)", rub_converted)
     
-    # -----------------------------------------------------------------
-    # Employment type
-    # -----------------------------------------------------------------
     if "employment_type" in df.columns:
         df["employment_type"] = df.apply(
             lambda r: normalize_employment_type(
@@ -2683,9 +2545,7 @@ def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
             axis=1,
         )
 
-    # -----------------------------------------------------------------
-    # Visa / relocation
-    # -----------------------------------------------------------------
+    # Определяет наличие визовой поддержки
     def _detect_visa(row):
         raw = row.get("visa_sponsorship")
         if raw is True:
@@ -2712,6 +2572,7 @@ def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
 
         return False
 
+    # Определяет наличие релокации
     def _detect_reloc(row):
         if row.get("relocation") in (True, False):
             return row["relocation"]
@@ -2723,9 +2584,7 @@ def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     df["visa_sponsorship"] = df.apply(_detect_visa, axis=1)
     df["relocation"] = df.apply(_detect_reloc, axis=1)
 
-    # -----------------------------------------------------------------
     # Spoken languages
-    # -----------------------------------------------------------------
     COUNTRY_DEFAULT_LANGUAGES = {
         "UNITED STATES": ["English"],
         "UNITED KINGDOM": ["English"],
@@ -2771,6 +2630,7 @@ def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
         "SOUTH AFRICA": ["English"],
     }
 
+    # Определяет языки вакансии по данным строки
     def _detect_langs(row):
         existing = row.get("spoken_languages")
         if not _is_missing(existing) and str(existing) not in ("{}", "[]"):
@@ -2789,18 +2649,13 @@ def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
 
     df["spoken_languages"] = df.apply(_detect_langs, axis=1)
 
-    # -----------------------------------------------------------------
-    # Fallback URLs
-    # -----------------------------------------------------------------
     if "url" in df.columns and "source" in df.columns:
         mask_no_url = df["url"].isna() | (df["url"].astype(str).str.strip() == "")
         for src_name, fallback_url in SOURCE_FALLBACK_URLS.items():
             src_mask = mask_no_url & (df["source"].astype(str).str.lower() == src_name)
             df.loc[src_mask, "url"] = fallback_url
 
-    # -----------------------------------------------------------------
-    # Role flags
-    # -----------------------------------------------------------------
+    # Проверяет совпадение роли с набором ключевых слов
     def _role_match(title: str, family_keywords: list[str]) -> bool:
         t = str(title or "").lower()
         return any(k in t for k in family_keywords)
@@ -2810,9 +2665,8 @@ def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     df["is_python_role"] = df["title_normalized"].apply(lambda t: "python" in str(t or "").lower())
     df["is_analyst_role"] = df["title_normalized"].apply(lambda t: _role_match(t, _ROLE_FAMILIES["data_analyst"]))
 
-    # -----------------------------------------------------------------
+
     # Cleanup / ordering
-    # -----------------------------------------------------------------
     if "_dedupe_key" in df.columns:
         df.drop(columns=["_dedupe_key"], inplace=True)
 
@@ -2828,9 +2682,7 @@ def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     rest = [c for c in df.columns if c not in existing]
     df = df[existing + rest]
 
-    # -----------------------------------------------------------------
     # Метрики качества
-    # -----------------------------------------------------------------
     try:
         missing_country = int(df["country"].isna().sum()) if "country" in df.columns else 0
         remote_count = int((df["remote_type"] == "remote").sum()) if "remote_type" in df.columns else 0
@@ -2852,10 +2704,6 @@ def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     logger.info("Cleaning done: %s rows (dropped %s)", len(df), initial - len(df))
     return df
 
-
-# =====================================================================
-# [Пункт 16] Определение колонок для Qdrant vs PostgreSQL
-# =====================================================================
 
 # Колонки, которые идут в Qdrant (payload + текст для эмбеддинга).
 QDRANT_COLUMNS = [
@@ -2885,7 +2733,6 @@ QDRANT_COLUMNS = [
 ]
 
 # Все колонки чистого датасета (PostgreSQL + аналитика).
-# Это суперсет QDRANT_COLUMNS + pipeline/audit поля.
 CLEAN_DATASET_COLUMNS = [
     "job_id",
     "source_job_id",
@@ -2963,6 +2810,7 @@ FINAL_COLUMN_ORDER = [
     "parsed_at",
 ]
 
+# Строит ключ для объединения cleaned-слоёв
 def _merge_dedupe_key(row) -> str:
     source = _safe_key_part(row.get("source"))
     source_job_id = _safe_key_part(row.get("source_job_id"))
@@ -2978,7 +2826,7 @@ def _merge_dedupe_key(row) -> str:
         return f"job::{job_id}"
     return f"title::{source}::{company}::{title}"
 
-
+# Объединяет новый cleaned-снимок с latest-версиейс
 def _merge_cleaned_with_latest(old_latest: pd.DataFrame, cleaned_new: pd.DataFrame) -> pd.DataFrame:
     if old_latest is None or old_latest.empty:
         return cleaned_new
@@ -3003,7 +2851,7 @@ def _merge_cleaned_with_latest(old_latest: pd.DataFrame, cleaned_new: pd.DataFra
     )
     return combined
 
-
+# Запускает clean-шаг и сохраняет snapshot и latest в S3
 def run_clean_step(
     date_str: str = None,
     raw_s3_keys: list[str] | None = None,
@@ -3081,8 +2929,6 @@ def run_clean_step(
         latest_key,
         len(latest_df),
     )
-
-    # ВАЖНО: возвращаем dated snapshot, чтобы в Postgres грузилась только дельта запуска
     return snapshot_key
 
 

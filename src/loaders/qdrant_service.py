@@ -1,33 +1,3 @@
-"""
-qdrant_service.py
-
-Qdrant integration using FastEmbed (built into qdrant-client).
-Model: intfloat/multilingual-e5-large (1024d, RU/EN).
-
-v2 — Payload выровнен с форматом кандидата из LangGraph:
-  Кандидат:                     Вакансия (payload):
-  ─────────                     ───────────────────
-  grade                    ↔    grade              (Junior/Middle/Senior/Lead/...)
-  specialization           ↔    title              (название вакансии)
-  skills: [str]            ↔    skills: [str]      (канонические имена из SKILL_SYNONYMS)
-  country                  ↔    country            (UPPER CASE)
-  city                     ↔    city               (UPPER CASE)
-  work_format: [str]       ↔    work_format: str   (Remote/Hybrid/Office/Unknown)
-  experience_years         ↔    years_experience_min / years_experience_max
-  desired_salary           ↔    salary_from / salary_to (МЕСЯЧНЫЕ, оригинальная валюта)
-                                + salary_from_rub / salary_to_rub (МЕСЯЧНЫЕ, в рублях для матчинга)
-  foreign_languages: [str] ↔    spoken_languages: [str]
-  relocation               ↔    relocation
-
-Ключевые изменения:
-- Убраны ссылки на удалённые колонки (key_skills, skills_extracted, tech_stack_tags)
-- skills берутся ТОЛЬКО из skills_normalized (канонические имена)
-- grade маппит seniority_normalized в формат, совместимый с кандидатом
-- country/city в UPPER CASE
-- salary_from/salary_to — всегда месячные
-- normalize_candidate_skills() — нормализует скиллы кандидата тем же словарём
-"""
-
 from __future__ import annotations
 
 import os
@@ -41,35 +11,23 @@ from qdrant_client.http import models
 
 logger = logging.getLogger(__name__)
 
-# ============================================================================
-# CONFIG
-# ============================================================================
-
+# Запускает clean-шаг и сохраняет snapshot и latest в S3
 COLLECTION_NAME = "vacancies"
 MODEL_NAME = "intfloat/multilingual-e5-large"  # 1024d, multilingual RU/EN
 BATCH_SIZE = 64
 EMBEDDING_LIMIT = int(os.getenv("EMBEDDING_LIMIT", "3000"))
 
-# ============================================================================
-# CONNECTION
-# ============================================================================
-
+# Кэш клиента Qdrant
 _client: Optional[QdrantClient] = None
 
-
+# Проверка доступности CUDA для FastEmbed
 def _detect_cuda_available() -> bool:
-    """
-    Пытаемся понять, доступен ли GPU для ONNX/FastEmbed.
-    Если нет GPU runtime или нет нужных пакетов — спокойно уходим в CPU.
-    """
     forced = os.getenv("QDRANT_CUDA", "auto").strip().lower()
 
     if forced in {"0", "false", "no", "off", "cpu"}:
         return False
     if forced in {"1", "true", "yes", "on", "gpu"}:
         return True
-
-    # auto mode
     try:
         import onnxruntime as ort
         providers = ort.get_available_providers()
@@ -77,7 +35,7 @@ def _detect_cuda_available() -> bool:
     except Exception:
         return False
 
-
+# Чтение списка GPU device ids из env
 def _parse_device_ids() -> Optional[list[int]]:
     raw = os.getenv("QDRANT_CUDA_DEVICE_IDS", "").strip()
     if not raw:
@@ -87,7 +45,7 @@ def _parse_device_ids() -> Optional[list[int]]:
     except Exception:
         return None
 
-
+# Подключение к Qdrant и настройка embedding model
 def get_client() -> QdrantClient:
     global _client
     if _client is not None:
@@ -126,10 +84,7 @@ def get_client() -> QdrantClient:
 
     raise RuntimeError(f"Qdrant unavailable: {last_error}")
 
-# ============================================================================
-# DETERMINISTIC UUID
-# ============================================================================
-
+# Детерминированный UUID для вакансии
 def _det_uuid(job: dict) -> str:
     stable_key = (
         job.get("job_id")
@@ -140,10 +95,7 @@ def _det_uuid(job: dict) -> str:
     return str(uuid.uuid5(uuid.NAMESPACE_URL, str(stable_key)))
 
 
-# ============================================================================
-# COLLECTION INIT
-# ============================================================================
-
+# Инициализация коллекции в Qdrant
 def init_qdrant() -> QdrantClient:
     client = get_client()
     if client.collection_exists(COLLECTION_NAME):
@@ -158,12 +110,7 @@ def init_qdrant() -> QdrantClient:
     return client
 
 
-# ============================================================================
-# GRADE MAPPING: seniority_normalized → grade (совместимый с кандидатом)
-# ============================================================================
-
-# Маппинг seniority_normalized в формат, который кандидат тоже использует.
-# Кандидат присылает "Junior|Middle|Senior", но мы поддерживаем расширенный набор.
+# Маппинг seniority в grade
 SENIORITY_TO_GRADE = {
     "intern": "Intern",
     "junior": "Junior",
@@ -176,7 +123,7 @@ SENIORITY_TO_GRADE = {
     "unknown": "Specialist",
 }
 
-# Обратный маппинг: какой grade кандидата покрывает какие grade вакансий.
+# Допустимые grade вакансий для grade кандидата
 GRADE_MATCH_MAP = {
     "intern": ["Intern"],
     "junior": ["Intern", "Junior"],
@@ -188,18 +135,14 @@ GRADE_MATCH_MAP = {
     "director": ["Director", "Manager"],
 }
 
-
+# Преобразование seniority_normalized в grade
 def _map_grade(seniority_normalized: str) -> str:
     """Маппит seniority_normalized в grade для payload."""
     return SENIORITY_TO_GRADE.get(
         str(seniority_normalized).strip().lower(), "Specialist"
     )
 
-
-# ============================================================================
-# WORK FORMAT MAPPING: remote_type → work_format
-# ============================================================================
-
+# Маппинг remote_type в work_format
 REMOTE_TO_WORK_FORMAT = {
     "remote": "Remote",
     "hybrid": "Hybrid",
@@ -207,7 +150,7 @@ REMOTE_TO_WORK_FORMAT = {
     "office": "Office",
     "unknown": "Unknown",
 }
-
+# Допустимые форматы вакансий для формата кандидата
 WORK_FORMAT_MATCH_MAP = {
     "remote": ["Remote"],
     "hybrid": ["Hybrid", "Remote"],
@@ -215,15 +158,12 @@ WORK_FORMAT_MATCH_MAP = {
     "onsite": ["Office"],
 }
 
-
+# Преобразование remote_type в work_format
 def _map_work_format(remote_type: str) -> str:
     return REMOTE_TO_WORK_FORMAT.get(str(remote_type).lower(), "Unknown")
 
 
-# ============================================================================
-# SKILLS: parse + normalize (shared with candidate)
-# ============================================================================
-
+# Парсинг postgres array или JSON list
 def _parse_pg_array(val) -> List[str]:
     """Parse postgres array / JSON list → list of strings."""
     if isinstance(val, list):
@@ -244,12 +184,8 @@ def _parse_pg_array(val) -> List[str]:
             pass
     return [s.strip() for s in val.split(",") if s.strip()]
 
-
+# Нормализация скиллов кандидата тем же словарём, что и вакансии
 def normalize_candidate_skills(raw_skills: List[str]) -> List[str]:
-    """
-    Нормализует скиллы кандидата ТЕМ ЖЕ словарём, что и вакансии.
-    Используется в LangGraph перед поиском.
-    """
     try:
         from src.cleaners.data_cleaner import SKILL_SYNONYMS
     except ImportError:
@@ -262,14 +198,11 @@ def normalize_candidate_skills(raw_skills: List[str]) -> List[str]:
         normalized.add(canonical)
     return sorted(normalized)
 
-
+# Конвертация зарплаты кандидата в RUB для фильтрации
 def convert_candidate_salary_to_rub(
     desired_salary: float,
     candidate_currency: str = "RUB",
 ) -> Optional[float]:
-    """
-    Конвертирует desired_salary кандидата в RUB для сравнения с salary_from_rub в Qdrant.
-    """
     if desired_salary is None:
         return None
 
@@ -285,10 +218,7 @@ def convert_candidate_salary_to_rub(
     return round(desired_salary * rate)
 
 
-# ============================================================================
-# BUILD DOCUMENT + METADATA
-# ============================================================================
-
+# Построение текста документа для embedding
 def _build_document(job: Dict) -> str:
     """
     Build E5-formatted document text for embedding.
@@ -301,7 +231,6 @@ def _build_document(job: Dict) -> str:
     city = job.get("city") or ""
     work_format = _map_work_format(job.get("remote_type") or "")
 
-    # Skills — только из skills_normalized
     skills = _parse_pg_array(job.get("skills_normalized"))
     skills_text = ", ".join(skills) if skills else ""
 
@@ -322,26 +251,9 @@ def _build_document(job: Dict) -> str:
 
     return " ".join(parts)
 
-
+# Построение payload вакансии для Qdrant
 def _build_metadata(job: Dict) -> Dict[str, Any]:
-    """
-    Build metadata payload aligned with LangGraph candidate format.
 
-    Кандидат:
-    {
-        "name": "",
-        "country": "",
-        "city": "",
-        "relocation": false,
-        "grade": "",
-        "specialization": "",
-        "experience_years": 0,
-        "desired_salary": 0,
-        "work_format": [],
-        "foreign_languages": [],
-        "skills": [],
-    }
-    """
     skills = _parse_pg_array(job.get("skills_normalized"))
     foreign_languages = _parse_pg_array(job.get("spoken_languages"))
 
@@ -357,7 +269,7 @@ def _build_metadata(job: Dict) -> Dict[str, Any]:
     return {
         # Поля, сопоставимые с кандидатом из LangGraph
         "specialization": specialization,
-        "title": job.get("title"),   # display field
+        "title": job.get("title"),   
         "company": job.get("company_name") or job.get("company"),
         "grade": grade,
         "skills": skills,
@@ -390,19 +302,8 @@ def _build_metadata(job: Dict) -> Dict[str, Any]:
     }
 
 
-# ============================================================================
-# LOAD VACANCIES (Airflow Task 5)
-# ============================================================================
-
+# Загрузка pending вакансий из Postgres в Qdrant
 def load_vacancies_to_qdrant(date_str: str = None, batch_size: int = BATCH_SIZE) -> Dict:
-    """
-    Fetch pending jobs from Postgres, embed via FastEmbed, load to Qdrant.
-
-    Important:
-    - all vacancies still go to PostgreSQL at the load step;
-    - only vacancies with non-empty skills_normalized are sent to Qdrant,
-      because LangGraph matching relies on resume skills vs vacancy skills.
-    """
     from src.loaders.db_loader import get_connection
 
     client = get_client()
@@ -488,10 +389,7 @@ def load_vacancies_to_qdrant(date_str: str = None, batch_size: int = BATCH_SIZE)
     return result
 
 
-# ============================================================================
-# SEARCH: by candidate profile (for LangGraph)
-# ============================================================================
-
+# Поиск вакансий под профиль кандидата
 def search_for_candidate(
     candidate: Dict[str, Any],
     limit: int = 20,
@@ -520,7 +418,6 @@ def search_for_candidate(
     raw_skills = candidate.get("skills") or []
     normalized_skills = normalize_candidate_skills(raw_skills)
 
-    # Build query text
     parts = []
     if candidate.get("specialization"):
         parts.append(candidate["specialization"])
@@ -535,10 +432,9 @@ def search_for_candidate(
 
     query_text = f"query: {' '.join(parts)}"
 
-    # Build Qdrant filter
     conditions = []
 
-    # Grade filter — маппим grade кандидата к допустимым grade вакансий.
+    # Фильтр по grade кандидата
     grade = candidate.get("grade")
     if grade:
         allowed = GRADE_MATCH_MAP.get(grade.lower(), [grade])
@@ -549,7 +445,7 @@ def search_for_candidate(
             )
         )
 
-    # Work format filter — кандидат может указать несколько форматов.
+    # Фильтр по допустимым work_format
     wf = candidate.get("work_format")
     if wf:
         if isinstance(wf, str):
@@ -566,7 +462,7 @@ def search_for_candidate(
                 )
             )
 
-    # Country filter — приводим к UPPER CASE для совместимости.
+    # Фильтр по стране
     country = candidate.get("country")
     if country:
         conditions.append(
@@ -585,7 +481,7 @@ def search_for_candidate(
         limit=limit,
     )
 
-    # Enrich results with skill matching (canonical names).
+    # Обогащение результатов пересечением скиллов
     candidate_skills_set = set(s.lower() for s in normalized_skills)
 
     output = []
@@ -616,10 +512,7 @@ def search_for_candidate(
     return output
 
 
-# ============================================================================
-# SEARCH: free text
-# ============================================================================
-
+# Обогащение результатов пересечением скиллов
 def search_similar(
     query: str,
     limit: int = 20,
@@ -669,10 +562,7 @@ def search_similar(
     ]
 
 
-# ============================================================================
-# SEARCH: similar to existing job
-# ============================================================================
-
+# Поиск вакансий, похожих на существующую вакансию.
 def search_similar_to_job(
     company: str,
     title: str,
@@ -720,16 +610,13 @@ def search_similar_to_job(
         return []
 
 
-# ============================================================================
-# AIRFLOW TASK
-# ============================================================================
-
+# Airflow entrypoint для инициализации коллекции и загрузки вакансий
 def run_embedding_step(date_str: str = None) -> Dict:
     """AIRFLOW TASK 5: Init collection + load new vacancies."""
     init_qdrant()
     return load_vacancies_to_qdrant(date_str)
 
-
+# Локальный запуск для проверки
 if __name__ == "__main__":
     init_qdrant()
     print("Qdrant ready")

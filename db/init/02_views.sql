@@ -1,7 +1,7 @@
 BEGIN;
 
 -- Аналитика по качеству парсинга и заполненности полей.
-CREATE OR REPLACE VIEW v_parsing_stats AS2
+CREATE OR REPLACE VIEW v_parsing_stats AS
 SELECT
     source,
     country,

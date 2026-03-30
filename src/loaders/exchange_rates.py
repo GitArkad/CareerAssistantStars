@@ -12,16 +12,16 @@ import requests
 
 logger = logging.getLogger(__name__)
 
-# Валюты, которые должны поддерживаться в отображении.
+# Валюты для отображения в приложении
 TARGET_CURRENCIES = ["USD", "EUR", "RUB"]
 
-# Валюты, встречающиеся в исходных данных вакансий.
+# Дополнительные валюты из вакансий
 SOURCE_CURRENCIES = ["GBP", "KZT", "PLN", "UAH", "CAD", "AUD", "INR", "SGD", "BYN"]
 
 PIPELINE_CURRENCIES = sorted(set(TARGET_CURRENCIES + SOURCE_CURRENCIES))
 PIPELINE_NON_EUR = sorted(c for c in PIPELINE_CURRENCIES if c != "EUR")
 
-# Официальные API.
+# Официальные API
 ECB_API_BASE_URL = "https://data-api.ecb.europa.eu/service/data/EXR"
 CBR_DAILY_URL = "https://www.cbr.ru/scripts/XML_daily_eng.asp"
 
@@ -43,7 +43,7 @@ CACHE_TTL_SECONDS = int(__import__("os").getenv("FX_CACHE_TTL_SECONDS", "21600")
 _ECB_CACHE: dict[tuple[str, str], tuple[float, list[dict[str, str]]]] = {}
 _CBR_CACHE: dict[str, tuple[float, tuple[str, dict[str, float]]]] = {}
 
-
+# Чтение значения из кэша
 def _cache_get(cache: dict, key):
     item = cache.get(key)
     if not item:
@@ -54,16 +54,13 @@ def _cache_get(cache: dict, key):
         return None
     return value
 
-
+# Чтение значения из кэша
 def _cache_set(cache: dict, key, value):
     cache[key] = (time.monotonic() + CACHE_TTL_SECONDS, value)
     return value
 
 
-###########################################################
-# Вспомогательные функции
-###########################################################
-
+# Вспомогательные преобразования дат и списка валют
 def _parse_iso_date(value: str) -> date:
     return datetime.strptime(value, "%Y-%m-%d").date()
 
@@ -80,19 +77,14 @@ def _ecb_requested_currencies() -> list[str]:
     return [c for c in PIPELINE_NON_EUR if c in ECB_DAILY_CURRENCIES]
 
 
-###########################################################
-# ECB
-###########################################################
-
+# Формирование series key для ECB
 def _build_ecb_series_key(currencies: list[str]) -> str:
     if not currencies:
         raise ValueError("No currencies configured for ECB request.")
     return f"D.{'+'.join(currencies)}.EUR.SP00.A"
 
-
+# Формирование series key для ECB
 def _fetch_ecb_window(start_period: str, end_period: str) -> list[dict[str, str]]:
- # Загружаем окно дат из ECB одним запросом.
-
     cache_key = (start_period, end_period)
     cached = _cache_get(_ECB_CACHE, cache_key)
     if cached is not None:
@@ -122,10 +114,8 @@ def _fetch_ecb_window(start_period: str, end_period: str) -> list[dict[str, str]
     return _cache_set(_ECB_CACHE, cache_key, rows)
 
 
-
+# Сборка курсов ECB по датам
 def _build_ecb_by_date(rows: list[dict[str, str]]) -> dict[str, dict[str, float]]:
-    # Собираем курсы по датам и оставляем только полные даты.
-
     requested = _ecb_requested_currencies()
     by_date: dict[str, dict[str, float]] = {}
 
@@ -155,13 +145,8 @@ def _build_ecb_by_date(rows: list[dict[str, str]]) -> dict[str, dict[str, float]
     return complete_only
 
 
-###########################################################
-# Bank of Russia (CBR)
-###########################################################
-
+# Парсинг XML CBR в RUB-базовые курсы.
 def _parse_cbr_document(xml_text: str) -> tuple[str, dict[str, float]]:
-    # Парсим XML CBR в словарь RUB-based курсов.
-
     root = ET.fromstring(xml_text)
 
     raw_date = (root.attrib.get("Date") or "").strip()
@@ -198,10 +183,8 @@ def _parse_cbr_document(xml_text: str) -> tuple[str, dict[str, float]]:
 
     return actual_date, rub_rates
 
-
+# Загрузка XML CBR за конкретную дату
 def _fetch_cbr_for_requested_date(requested_date: str) -> tuple[str, dict[str, float]]:
-    # Загружаем ежедневный XML CBR за указанную дату.
-
     cached = _cache_get(_CBR_CACHE, requested_date)
     if cached is not None:
         return cached
@@ -216,13 +199,8 @@ def _fetch_cbr_for_requested_date(requested_date: str) -> tuple[str, dict[str, f
     return _cache_set(_CBR_CACHE, requested_date, _parse_cbr_document(resp.text))
 
 
-###########################################################
-# Сведение источников
-###########################################################
-
+# Сведение ECB и CBR в общий набор EUR-базовых курсов.
 def _compose_eur_rates_for_date(candidate_date: str, ecb_by_date: dict[str, dict[str, float]]) -> tuple[dict[str, float], dict]:
-# Собираем единый набор EUR-based курсов для одной общей официальной даты.
-
     if candidate_date not in ecb_by_date:
         raise ValueError(f"ECB has no complete observation for {candidate_date}")
 
@@ -235,7 +213,7 @@ def _compose_eur_rates_for_date(candidate_date: str, ecb_by_date: dict[str, dict
     eur_rates = dict(ecb_by_date[candidate_date])
     eur_rub = cbr_rub_rates["EUR"]
 
-    # Прямой курс EUR -> RUB.
+    # Прямой курс EUR -> RUB
     eur_rates["RUB"] = eur_rub
 
     supplemented_from_cbr: list[str] = []
@@ -246,7 +224,7 @@ def _compose_eur_rates_for_date(candidate_date: str, ecb_by_date: dict[str, dict
         if cur not in cbr_rub_rates:
             continue
 
-        # Достраиваем недостающие валюты через RUB-базу CBR.
+        # Достраиваем недостающие валюты через RUB-базу CBR
         eur_rates[cur] = eur_rub / cbr_rub_rates[cur]
         supplemented_from_cbr.append(cur)
 
@@ -261,10 +239,8 @@ def _compose_eur_rates_for_date(candidate_date: str, ecb_by_date: dict[str, dict
     return eur_rates, meta
 
 
-
+# Прямой курс EUR -> RUB
 def fetch_official_rates(rate_date: Optional[str] = None) -> tuple[dict[str, float], str, dict]:
-    # Ищем ближайшую общую официальную дату на или до requested date.
-
     as_of_date = _pick_as_of_date(rate_date)
     start_period = (as_of_date - timedelta(days=LOOKBACK_DAYS)).isoformat()
     end_period = as_of_date.isoformat()
@@ -300,13 +276,8 @@ def fetch_official_rates(rate_date: Optional[str] = None) -> tuple[dict[str, flo
     )
 
 
-###########################################################
-# Расчёт cross-rates
-###########################################################
-
+# Построение всех cross-rates из EUR-базы
 def compute_cross_rates(eur_rates: dict[str, float]) -> list[dict]:
-# Строим все пары base_currency -> target_currency из EUR-базы.
-
     full_rates = {"EUR": 1.0, **eur_rates}
     records: list[dict] = []
 
@@ -328,13 +299,8 @@ def compute_cross_rates(eur_rates: dict[str, float]) -> list[dict]:
     return records
 
 
-###########################################################
-# Запись в Postgres
-###########################################################
-
+# Обёртка над get_connection для src и локального запуска
 def _get_connection():
-    # Поддерживаем импорт как из src, так и из локального запуска.
-
     try:
         from src.loaders.db_loader import get_connection
     except ImportError:
@@ -342,10 +308,8 @@ def _get_connection():
     return get_connection()
 
 
-
+# Upsert курсов в exchange_rates
 def upsert_rates(rate_date: str, records: list[dict]) -> None:
-    # Записываем курсы в exchange_rates через upsert.
-
     from psycopg2.extras import execute_batch
 
     conn = _get_connection()
@@ -371,13 +335,8 @@ def upsert_rates(rate_date: str, records: list[dict]) -> None:
     logger.info("Upserted %d exchange-rate rows for %s", len(rows), rate_date)
 
 
-###########################################################
-# Основной шаг пайплайна
-###########################################################
-
+# Основной шаг обновления курсов для пайплайна
 def run_update_rates(rate_date: Optional[str] = None) -> dict:
-# Основной entrypoint для Airflow.
-
     eur_rates, actual_date, meta = fetch_official_rates(rate_date)
     cross_rates = compute_cross_rates(eur_rates)
     upsert_rates(actual_date, cross_rates)
@@ -395,10 +354,8 @@ def run_update_rates(rate_date: Optional[str] = None) -> dict:
     }
 
 
-
-def backfill_rates(start_date: str, end_date: Optional[str] = None) -> None:
-    # Историческая дозагрузка курсов по диапазону дат.
-    
+# Основной шаг обновления курсов для пайплайна
+def backfill_rates(start_date: str, end_date: Optional[str] = None) -> None:    
     start = _parse_iso_date(start_date)
     end = _parse_iso_date(end_date) if end_date else date.today()
 
@@ -416,6 +373,6 @@ def backfill_rates(start_date: str, end_date: Optional[str] = None) -> None:
             logger.error("Failed to backfill %s: %s", current_str, exc)
         current += timedelta(days=1)
 
-
+# Основной шаг обновления курсов для пайплайна
 if __name__ == "__main__":
     print(run_update_rates())

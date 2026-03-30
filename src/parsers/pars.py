@@ -1,8 +1,3 @@
-"""
-pars.py — IT Jobs Parser Pipeline v5.1.
-Keeps append-only raw snapshots, preserves Adzuna country metadata,
-and makes record normalization safer for incremental loads.
-"""
 
 from __future__ import annotations
 
@@ -131,16 +126,16 @@ RAW_COLUMNS = [
     "equity_bonus",
     "security_clearance",
 ]
-
+# Возвращает текущее UTC-время в ISO формате
 def _utcnow_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
-
+# Строит стабильный job_id по ключевым полям
 def _jid(src: str, source_job_id: Optional[str], url: Optional[str], title: Optional[str], company_name: Optional[str] = None) -> str:
     stable = source_job_id or url or f"{title or ''}|{company_name or ''}"
     return hashlib.sha256(f"{src}:{stable}".encode("utf-8")).hexdigest()[:32]
 
-
+# Очищает HTML и нормализует текст
 def _html(text: Optional[str]) -> str:
     if not text:
         return ""
@@ -162,13 +157,13 @@ def _html(text: Optional[str]) -> str:
 
     return re.sub(r"\s+", " ", soup.get_text(" ", strip=True)).strip()
 
-
+# Проверяет совпадение токена с учетом спецпаттернов
 def _match_token(text: str, token: str) -> bool:
     if token in SPECIAL_TOKEN_PATTERNS:
         return re.search(SPECIAL_TOKEN_PATTERNS[token], text) is not None
     return re.search(rf"(?<!\w){re.escape(token)}(?!\w)", text) is not None
 
-
+# Извлекает годы опыта из текста
 def _yrs(text: Optional[str]):
     if not text:
         return None, None
@@ -241,7 +236,7 @@ def _yrs(text: Optional[str]):
 
     return None, None
 
-
+# Нормализует грейд по тексту
 def _sen(text: Optional[str]) -> str:
     if not text:
         return "unknown"
@@ -251,26 +246,27 @@ def _sen(text: Optional[str]) -> str:
             return v
     return "unknown"
 
-
+# Извлекает найденные ключевые слова
 def _extract_set(text: Optional[str], keywords: set[str]) -> List[str]:
     if not text:
         return []
     low = text.lower()
     return sorted({k for k in keywords if _match_token(low, k)})
 
-
+# Приводит значение к JSON-совместимому виду
 def _jsonable(value: Any) -> Any:
     if isinstance(value, (dict, list, str, int, float, bool)) or value is None:
         return value
     return str(value)
 
+# Нормализует текст для поиска
 def _normalize_text(value: Optional[str]) -> str:
     value = (value or "").strip().lower()
     value = re.sub(r"[^a-z0-9+#./\s-]+", " ", value)
     value = re.sub(r"\s+", " ", value).strip()
     return value
 
-
+# Выделяет значимые токены из запроса
 def _query_tokens(query: str) -> list[str]:
     q = _normalize_text(query)
     if not q:
@@ -283,7 +279,7 @@ def _query_tokens(query: str) -> list[str]:
 
     return [t for t in q.split() if len(t) >= 2 and t not in stop]
 
-
+# Проверяет, подходит ли текст под запрос
 def _matches_query(text: str, query: str) -> bool:
     hay = _normalize_text(text)
     q = _normalize_text(query)
@@ -305,7 +301,7 @@ def _matches_query(text: str, query: str) -> bool:
 
     return False
 
-
+# Возвращает первый совпавший запрос
 def _first_matching_query(title: Optional[str], description: Optional[str], queries: list[str]) -> Optional[str]:
     haystack = f"{title or ''} {description or ''}"
     for q in queries:
@@ -313,19 +309,25 @@ def _first_matching_query(title: Optional[str], description: Optional[str], quer
             return q
     return None
 
+# Базовый класс для всех парсеров вакансий
 class BaseParser(ABC):
+
+    # Инициализирует базовое состояние парсера
     def __init__(self, src: str):
         self.source_name = src
         self.headers = {"User-Agent": "JobPipeline/5.1", "Accept": "application/json"}
         self.collected_ids: set[str] = set()
         self.vacancies: list[dict] = []
 
+    # Безопасно возвращает словарь
     def _sd(self, value):
         return value if isinstance(value, dict) else {}
 
+    # Безопасно возвращает список
     def _sl(self, value):
         return value if isinstance(value, list) else []
 
+    # Проверяет и выравнивает запись по схеме
     def _validate_record_schema(self, rec: dict) -> Optional[dict]:
         if not isinstance(rec, dict):
             return None
@@ -343,7 +345,7 @@ class BaseParser(ABC):
             if isinstance(val, (dict, list)) and col not in {"key_skills", "skills_extracted", "skills_normalized", "tech_stack_tags", "tools", "methodologies", "spoken_languages"}:
                 fixed[col] = json.dumps(val, ensure_ascii=False, default=str)
 
-        # примитивная sanity-check логика
+        # sanity-check логика
         if fixed.get("source") not in {
             "hh.ru", "greenhouse.com", "lever.co", "ashbyhq.com",
             "adzuna.com", "usajobs.gov", "arbeitnow.com", "himalayas.app"
@@ -352,11 +354,10 @@ class BaseParser(ABC):
 
         return fixed
 
-
+    # Собирает нормализованную запись вакансии
     def _rec(self, **kw):
         desc = kw.get("description") or ""
         req = kw.get("requirements") or ""
-        full = f"{kw.get('title') or ''} {desc} {req}"
         remote = bool(kw.get("remote", False))
         remote_type = kw.get("remote_type") or ("remote" if remote else "office")
         source_job_id = kw.get("source_job_id")
@@ -417,6 +418,7 @@ class BaseParser(ABC):
             **({"raw_json": raw_json} if KEEP_RAW_JSON else {}),
         }
 
+    # Добавляет вакансию без дублей
     def _add(self, record: dict):
         record = self._validate_record_schema(record)
         if not record:
@@ -427,6 +429,7 @@ class BaseParser(ABC):
             self.vacancies.append(record)
             self.collected_ids.add(job_id)
 
+    # Преобразует вакансии в DataFrame
     def to_df(self) -> pd.DataFrame:
         if not self.vacancies:
             return pd.DataFrame(columns=RAW_COLUMNS)
@@ -451,11 +454,14 @@ class BaseParser(ABC):
 
         return df
 
+# База для парсеров, которые работают по запросам
 class QueryParserBase(BaseParser, ABC):
     @abstractmethod
+    # Загружает вакансии по одному запросу
     def fetch(self, keyword: str, target: int, **kwargs) -> List[Dict]:
         raise NotImplementedError
 
+    # Запускает сбор по списку запросов
     def run(self, keywords=None, target=TARGET_PER_QUERY):
         keywords = keywords or get_queries_for_source(self.source_name)
         logger.info("[%s] %s queries", self.source_name, len(keywords))
@@ -473,7 +479,7 @@ class QueryParserBase(BaseParser, ABC):
             time.sleep(0.25)
         logger.info("[%s] Done: %s", self.source_name, len(self.vacancies))
 
-
+# База для парсеров, которые загружают общий каталог
 class CatalogParserBase(BaseParser, ABC):
     def __init__(self, src: str):
         super().__init__(src)
@@ -482,13 +488,16 @@ class CatalogParserBase(BaseParser, ABC):
         self.catalog_retry_sleep = float(os.getenv("CATALOG_RETRY_SLEEP", "2"))
 
     @abstractmethod
+    # Загружает каталог источника один раз
     def load_catalog_once(self) -> list[dict]:
         raise NotImplementedError
 
     @abstractmethod
+    # Преобразует сырую вакансию в запись
     def raw_to_record(self, raw_job: dict, matched_query: Optional[str]) -> Optional[dict]:
         raise NotImplementedError
 
+    # Повторяет загрузку каталога при ошибках
     def _load_catalog_with_retries(self) -> list[dict]:
         last_error: Optional[Exception] = None
         for attempt in range(1, self.catalog_load_retries + 2):
@@ -510,6 +519,7 @@ class CatalogParserBase(BaseParser, ABC):
             raise last_error
         return []
 
+    # Фильтрует каталог по запросам и сохраняет совпадения
     def run(self, keywords=None, target=MAX_TOTAL_PER_SOURCE):
         keywords = keywords or get_queries_for_source(self.source_name)
         logger.info("[%s] catalog-mode, %s queries", self.source_name, len(keywords))
@@ -544,13 +554,16 @@ class CatalogParserBase(BaseParser, ABC):
 
         logger.info("[%s] Done: %s", self.source_name, len(self.vacancies))
 
+# Парсер вакансий HH
 class HHParser(QueryParserBase):
+    # Настраивает парсер HH
     def __init__(self):
         super().__init__("hh.ru")
         self._hh_ids = set()
         self.detail_fetch_limit = max(0, HH_DETAIL_FETCH_LIMIT)
         self._detail_fetch_count = 0
 
+     # Запрашивает детальную карточку вакансии HH
     def _det(self, vacancy_id):
         if not vacancy_id or vacancy_id in self._hh_ids:
             return None
@@ -574,6 +587,7 @@ class HHParser(QueryParserBase):
                 time.sleep(2)
         return None
 
+    # Преобразует вакансию HH в запись
     def _p(self, v, keyword, country):
         sal = self._sd(v.get("salary"))
         area = self._sd(v.get("area"))
@@ -624,6 +638,7 @@ class HHParser(QueryParserBase):
             raw_json=v,
         )
 
+    # Загружает вакансии HH по запросу
     def fetch(self, keyword: str, target: int) -> list[dict]:
         areas = [113, 1, 2, 3, 4, 1001, 160]
         res: list[dict] = []
@@ -699,7 +714,9 @@ class HHParser(QueryParserBase):
 
         return res
 
+# Парсер Adzuna с учетом лимитов API
 class AdzunaParser(QueryParserBase):
+    # Сохраняет параметры доступа к API Adzuna
     def __init__(self, app_id, app_key):
         super().__init__("adzuna.com")
         self.app_id = app_id
@@ -708,6 +725,7 @@ class AdzunaParser(QueryParserBase):
         self.base_sleep_seconds = int(os.getenv("ADZUNA_RATE_SLEEP_SECONDS", "10"))
         self.auth_failed = False
 
+    # Определяет ответ с ограничением по лимиту
     def _is_rate_limited(self, response: requests.Response) -> bool:
         if response.status_code == 429:
             return True
@@ -727,6 +745,7 @@ class AdzunaParser(QueryParserBase):
             ]
         )
 
+    # Загружает вакансии Adzuna по странам и запросу
     def fetch(self, keyword: str, target: int) -> list[dict]:
         res: list[dict] = []
 
@@ -854,7 +873,9 @@ class AdzunaParser(QueryParserBase):
 
         return res
 
+# Парсер вакансий USAJobs
 class USAJobsParser(QueryParserBase):
+    # Настраивает заголовки для API USAJobs
     def __init__(self, api_key, email):
         super().__init__("usajobs.gov")
         self.headers.update({
@@ -863,9 +884,11 @@ class USAJobsParser(QueryParserBase):
             "Authorization-Key": api_key,
         })
 
+    # Запускает сбор с отдельным лимитом
     def run(self, keywords=None, target=USAJOBS_TARGET_PER_QUERY):
         super().run(keywords=keywords, target=target)
 
+    # Загружает вакансии USAJobs по запросу
     def fetch(self, keyword, target, **kwargs):
         res = []
         page = 1
@@ -943,8 +966,9 @@ class USAJobsParser(QueryParserBase):
 
         return res
 
-
+# Парсер каталога Himalayas
 class HimalayasParser(CatalogParserBase):
+    # Настраивает параметры загрузки каталога
     def __init__(self):
         super().__init__("himalayas.app")
         self.page_size = int(os.getenv("HIMALAYAS_PAGE_SIZE", "100"))
@@ -955,6 +979,7 @@ class HimalayasParser(CatalogParserBase):
         self.max_jobs = int(os.getenv("HIMALAYAS_MAX_JOBS", "15000"))
         self.request_timeout = int(os.getenv("HIMALAYAS_REQUEST_TIMEOUT", "8"))
 
+    # Загружает каталог Himalayas постранично
     def load_catalog_once(self):
         if self._catalog_cache is not None:
             return self._catalog_cache
@@ -1059,6 +1084,7 @@ class HimalayasParser(CatalogParserBase):
         self._catalog_cache = jobs_all
         return self._catalog_cache
 
+    # Преобразует вакансию Himalayas в запись
     def raw_to_record(self, j: dict, matched_query: Optional[str]) -> Optional[dict]:
         title = j.get("title", "")
         slug = (j.get("slug") or "").strip()
@@ -1099,8 +1125,9 @@ class HimalayasParser(CatalogParserBase):
             raw_json=j,
         )
 
-
+# Парсер каталога Arbeitnow
 class ArbeitnowParser(CatalogParserBase):
+    # Настраивает параметры загрузки Arbeitnow
     def __init__(self):
         super().__init__("arbeitnow.com")
         self.max_pages = int(os.getenv("ARBEITNOW_MAX_PAGES", "200"))
@@ -1108,6 +1135,7 @@ class ArbeitnowParser(CatalogParserBase):
         self.max_retries = int(os.getenv("ARBEITNOW_MAX_RETRIES", "2"))
         self.retry_sleep = float(os.getenv("ARBEITNOW_RETRY_SLEEP", "3"))
 
+    # Загружает каталог Arbeitnow постранично
     def load_catalog_once(self):
         if self._catalog_cache is not None:
             return self._catalog_cache
@@ -1202,6 +1230,7 @@ class ArbeitnowParser(CatalogParserBase):
         self._catalog_cache = jobs_all
         return self._catalog_cache
 
+    # Преобразует вакансию Arbeitnow в запись
     def raw_to_record(self, j: dict, matched_query: Optional[str]) -> Optional[dict]:
         title = (j.get("title") or "").strip()
         desc = (j.get("description") or "").strip()
@@ -1228,11 +1257,13 @@ class ArbeitnowParser(CatalogParserBase):
             raw_json=j,
         )
 
-
+# Парсер каталогов Greenhouse
 class GreenhouseParser(CatalogParserBase):
+    # Инициализирует парсер Greenhouse
     def __init__(self):
         super().__init__("greenhouse.com")
 
+    # Загружает вакансии активных компаний Greenhouse
     def load_catalog_once(self):
         if self._catalog_cache is not None:
             return self._catalog_cache
@@ -1284,6 +1315,7 @@ class GreenhouseParser(CatalogParserBase):
         self._catalog_cache = jobs_all
         return self._catalog_cache
 
+    # Преобразует вакансию Greenhouse в запись
     def raw_to_record(self, j: dict, matched_query: Optional[str]) -> Optional[dict]:
         loc = self._sd(j.get("location"))
         departments = self._sl(j.get("departments"))
@@ -1302,11 +1334,13 @@ class GreenhouseParser(CatalogParserBase):
             raw_json=j,
         )
 
-
+# Парсер каталогов Lever
 class LeverParser(CatalogParserBase):
+    # Инициализирует парсер Lever
     def __init__(self):
         super().__init__("lever.co")
 
+    # Загружает вакансии активных компаний Lever
     def load_catalog_once(self):
         if self._catalog_cache is not None:
             return self._catalog_cache
@@ -1359,6 +1393,7 @@ class LeverParser(CatalogParserBase):
         self._catalog_cache = jobs_all
         return self._catalog_cache
 
+    # Преобразует вакансию Lever в запись
     def raw_to_record(self, j: dict, matched_query: Optional[str]) -> Optional[dict]:
         cats = self._sd(j.get("categories"))
         desc = j.get("descriptionPlain") or j.get("description") or ""
@@ -1384,10 +1419,13 @@ class LeverParser(CatalogParserBase):
             raw_json=j,
         )
 
+# Парсер вакансий Ashby
 class AshbyParser(QueryParserBase):
+    # Инициализирует парсер Ashby
     def __init__(self):
         super().__init__("ashbyhq.com")
 
+    # Загружает вакансии одной компании из Ashby.
     def fetch_company_jobs(self, slug: str) -> list[dict]:
         url = "https://jobs.ashbyhq.com/api/non-user-graphql?op=ApiJobBoardWithTeams"
 
@@ -1464,7 +1502,7 @@ class AshbyParser(QueryParserBase):
 
         return result
 
-    
+    # Фильтрует вакансии Ashby по запросу  
     def fetch(self, keyword: str, target: int) -> list[dict]:
         companies_raw = get_active_companies("ashby")
         res: list[dict] = []
@@ -1474,7 +1512,6 @@ class AshbyParser(QueryParserBase):
             if len(res) >= target:
                 break
 
-            # Поддерживаем и dict, и str
             if isinstance(company, dict):
                 slug = (
                     company.get("company_key")
@@ -1542,7 +1579,7 @@ class AshbyParser(QueryParserBase):
 
         return res
 
-
+# Собирает список парсеров по доступным настройкам
 def build_parsers():
     parsers: list[BaseParser] = [HHParser()]
 
@@ -1565,9 +1602,8 @@ def build_parsers():
     ]
     return parsers
 
-
+# Запускает парсинг и сохраняет raw-выгрузки
 def run_parse_step(date_str=None):
-    from src.loaders.s3_storage import ensure_bucket, make_run_id, raw_key, upload_df
     date_str = date_str or datetime.now(timezone.utc).strftime("%Y-%m-%d")
     run_id = make_run_id(date_str)
     ensure_bucket()

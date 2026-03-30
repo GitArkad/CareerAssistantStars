@@ -397,7 +397,461 @@ def run_aggregate_step(etl_run_id: Optional[int] = None) -> dict:
     logger.info("Aggregate step complete: %s", summary)
     return summary
 
+
+# Полный пересчёт слоя job_skills для аналитики и Streamlit
+# Источник: jobs_curated + skills_dictionary + skill_match_rules
+# Логика:
+# - normalized_array: skills_normalized
+# - text_extract: skills_extracted
+# - key_skill: key_skills
+#
+# Для каждой строки пытаемся сначала найти exact canonical match,
+# а затем fallback через synonym rules.
+def run_refresh_job_skills_step(etl_run_id: Optional[int] = None) -> dict:
+    from src.loaders.db_loader import get_connection, update_etl_run_progress
+
+    summary = {
+        "job_skills_rows": 0,
+        "normalized_array_rows": 0,
+        "text_extract_rows": 0,
+        "key_skill_rows": 0,
+        "status": "success",
+    }
+
+    conn = None
+    cur = None
+
+    try:
+        conn = get_connection()
+        cur = conn.cursor()
+
+        cur.execute("TRUNCATE TABLE job_skills;")
+        logger.info("job_skills truncated before rebuild")
+
+        cur.execute(
+            """
+            INSERT INTO job_skills (
+                job_id,
+                skill_id,
+                source_type,
+                confidence,
+                is_required
+            )
+            WITH source_arrays AS (
+                SELECT
+                    jc.job_id,
+                    BTRIM(skill_name) AS skill_name,
+                    'normalized_array'::text AS source_type,
+                    1.0000::numeric AS confidence,
+                    NULL::boolean AS is_required
+                FROM jobs_curated jc
+                CROSS JOIN LATERAL unnest(COALESCE(jc.skills_normalized, '{}'::text[])) AS skill_name
+
+                UNION ALL
+
+                SELECT
+                    jc.job_id,
+                    BTRIM(skill_name) AS skill_name,
+                    'text_extract'::text AS source_type,
+                    0.8500::numeric AS confidence,
+                    NULL::boolean AS is_required
+                FROM jobs_curated jc
+                CROSS JOIN LATERAL unnest(COALESCE(jc.skills_extracted, '{}'::text[])) AS skill_name
+
+                UNION ALL
+
+                SELECT
+                    jc.job_id,
+                    BTRIM(skill_name) AS skill_name,
+                    'key_skill'::text AS source_type,
+                    1.0000::numeric AS confidence,
+                    TRUE AS is_required
+                FROM jobs_curated jc
+                CROSS JOIN LATERAL unnest(COALESCE(jc.key_skills, '{}'::text[])) AS skill_name
+            ),
+            resolved AS (
+                SELECT DISTINCT
+                    sa.job_id,
+                    COALESCE(sd.skill_id, smr.skill_id) AS skill_id,
+                    sa.source_type,
+                    sa.confidence,
+                    sa.is_required
+                FROM source_arrays sa
+                LEFT JOIN skills_dictionary sd
+                    ON lower(sd.canonical_name) = lower(sa.skill_name)
+                LEFT JOIN skill_match_rules smr
+                    ON lower(smr.synonym) = lower(sa.skill_name)
+                WHERE sa.skill_name IS NOT NULL
+                  AND sa.skill_name <> ''
+                  AND COALESCE(sd.skill_id, smr.skill_id) IS NOT NULL
+            )
+            SELECT
+                job_id,
+                skill_id,
+                source_type,
+                confidence,
+                is_required
+            FROM resolved
+            ON CONFLICT (job_id, skill_id, source_type) DO NOTHING;
+            """
+        )
+        summary["job_skills_rows"] = cur.rowcount
+        logger.info("job_skills rebuilt: %s rows inserted", cur.rowcount)
+
+        cur.execute(
+            """
+            SELECT source_type, COUNT(*)
+            FROM job_skills
+            GROUP BY source_type;
+            """
+        )
+        for source_type, row_count in cur.fetchall():
+            if source_type == "normalized_array":
+                summary["normalized_array_rows"] = row_count
+            elif source_type == "text_extract":
+                summary["text_extract_rows"] = row_count
+            elif source_type == "key_skill":
+                summary["key_skill_rows"] = row_count
+
+        conn.commit()
+
+        if etl_run_id is not None:
+            with get_connection() as meta_conn:
+                update_etl_run_progress(
+                    meta_conn,
+                    etl_run_id,
+                    aggregates_updated=True,
+                )
+                meta_conn.commit()
+
+    except Exception as e:
+        summary["status"] = "failed"
+        summary["error"] = str(e)
+        logger.error("job_skills refresh failed: %s", e)
+
+        if conn is not None:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+
+        raise
+
+    finally:
+        if cur is not None:
+            try:
+                cur.close()
+            except Exception:
+                pass
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+    logger.info("job_skills refresh complete: %s", summary)
+    return summary
+
+
+# Полный пересчёт v2-аналитики для Streamlit.
+# Источник: jobs_curated + job_skills.
+#
+# ВАЖНО:
+# - salary_aggregates_v2 хранит статистику в исходной валюте вакансий.
+# - market_skill_stats_v2 использует DISTINCT по (job_id, skill_id),
+#   чтобы один и тот же навык, пришедший из нескольких source_type,
+#   не завышал медианы и доли.
+def run_aggregate_v2_step(etl_run_id: Optional[int] = None) -> dict:
+    from src.loaders.db_loader import get_connection, update_etl_run_progress
+
+    summary = {
+        "salary_aggregates_v2_updated": 0,
+        "market_role_stats_v2_updated": 0,
+        "market_skill_stats_v2_updated": 0,
+        "status": "success",
+    }
+
+    conn = None
+    cur = None
+
+    try:
+        conn = get_connection()
+        cur = conn.cursor()
+
+        cur.execute(
+            """
+            TRUNCATE TABLE
+                salary_aggregates_v2,
+                market_role_stats_v2,
+                market_skill_stats_v2;
+            """
+        )
+        logger.info("v2 aggregate tables truncated before rebuild")
+
+        cur.execute(
+            """
+            INSERT INTO salary_aggregates_v2 (
+                role,
+                country,
+                seniority,
+                is_remote,
+                currency,
+                sample_size,
+                p25,
+                p50,
+                p75,
+                avg_salary,
+                updated_at
+            )
+            SELECT
+                COALESCE(NULLIF(BTRIM(specialty), ''), NULLIF(BTRIM(title_normalized), ''), NULLIF(BTRIM(title), ''), 'unknown') AS role,
+                COALESCE(NULLIF(BTRIM(COALESCE(country_normalized, country)), ''), 'unknown') AS country,
+                COALESCE(NULLIF(BTRIM(seniority_normalized), ''), 'unknown') AS seniority,
+                COALESCE(remote, remote_type IN ('remote', 'hybrid')) AS is_remote,
+                COALESCE(NULLIF(BTRIM(currency), ''), 'unknown') AS currency,
+                COUNT(*) AS sample_size,
+                PERCENTILE_CONT(0.25) WITHIN GROUP (ORDER BY salary_midpoint) AS p25,
+                PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY salary_midpoint) AS p50,
+                PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY salary_midpoint) AS p75,
+                AVG(salary_midpoint) AS avg_salary,
+                NOW() AS updated_at
+            FROM (
+                SELECT
+                    specialty,
+                    title_normalized,
+                    title,
+                    country,
+                    country_normalized,
+                    seniority_normalized,
+                    remote,
+                    remote_type,
+                    currency,
+                    CASE
+                        WHEN salary_from IS NOT NULL AND salary_to IS NOT NULL THEN (salary_from + salary_to) / 2.0
+                        WHEN salary_from IS NOT NULL THEN salary_from
+                        WHEN salary_to IS NOT NULL THEN salary_to
+                        ELSE NULL
+                    END AS salary_midpoint
+                FROM jobs_curated
+            ) t
+            WHERE salary_midpoint IS NOT NULL
+            GROUP BY 1,2,3,4,5;
+            """
+        )
+        summary["salary_aggregates_v2_updated"] = cur.rowcount
+        logger.info("salary_aggregates_v2: %s rows inserted", cur.rowcount)
+
+        cur.execute(
+            """
+            WITH base AS (
+                SELECT
+                    COALESCE(NULLIF(BTRIM(specialty), ''), NULLIF(BTRIM(title_normalized), ''), NULLIF(BTRIM(title), ''), 'unknown') AS role,
+                    COALESCE(NULLIF(BTRIM(COALESCE(country_normalized, country)), ''), 'unknown') AS country,
+                    COALESCE(NULLIF(BTRIM(seniority_normalized), ''), 'unknown') AS seniority,
+                    COALESCE(remote, remote_type IN ('remote', 'hybrid')) AS is_remote,
+                    CASE
+                        WHEN salary_from IS NOT NULL AND salary_to IS NOT NULL THEN (salary_from + salary_to) / 2.0
+                        WHEN salary_from IS NOT NULL THEN salary_from
+                        WHEN salary_to IS NOT NULL THEN salary_to
+                        ELSE NULL
+                    END AS salary_midpoint,
+                    COALESCE(years_experience_min, years_experience_max, 1) AS years_exp_proxy
+                FROM jobs_curated
+            )
+            INSERT INTO market_role_stats_v2 (
+                role,
+                country,
+                seniority,
+                is_remote,
+                jobs_count,
+                median_salary,
+                avg_salary,
+                competition_proxy,
+                updated_at
+            )
+            SELECT
+                role,
+                country,
+                seniority,
+                is_remote,
+                COUNT(*) AS jobs_count,
+                PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY salary_midpoint) AS median_salary,
+                AVG(salary_midpoint) AS avg_salary,
+                ROUND(COUNT(*)::numeric / GREATEST(AVG(NULLIF(years_exp_proxy, 0)), 1), 2) AS competition_proxy,
+                NOW() AS updated_at
+            FROM base
+            GROUP BY role, country, seniority, is_remote;
+            """
+        )
+        summary["market_role_stats_v2_updated"] = cur.rowcount
+        logger.info("market_role_stats_v2: %s rows inserted", cur.rowcount)
+
+        cur.execute(
+            """
+            WITH base_jobs AS (
+                SELECT
+                    jc.job_id,
+                    COALESCE(NULLIF(BTRIM(jc.specialty), ''), NULLIF(BTRIM(jc.title_normalized), ''), NULLIF(BTRIM(jc.title), ''), 'unknown') AS role,
+                    COALESCE(NULLIF(BTRIM(COALESCE(jc.country_normalized, jc.country)), ''), 'unknown') AS country,
+                    COALESCE(NULLIF(BTRIM(jc.seniority_normalized), ''), 'unknown') AS seniority,
+                    COALESCE(jc.remote, jc.remote_type IN ('remote', 'hybrid')) AS is_remote,
+                    CASE
+                        WHEN jc.salary_from IS NOT NULL AND jc.salary_to IS NOT NULL THEN (jc.salary_from + jc.salary_to) / 2.0
+                        WHEN jc.salary_from IS NOT NULL THEN jc.salary_from
+                        WHEN jc.salary_to IS NOT NULL THEN jc.salary_to
+                        ELSE NULL
+                    END AS salary_midpoint
+                FROM jobs_curated jc
+            ),
+            market_slices AS (
+                SELECT
+                    role,
+                    country,
+                    seniority,
+                    is_remote,
+                    COUNT(*) AS jobs_total
+                FROM base_jobs
+                GROUP BY role, country, seniority, is_remote
+            ),
+            jobs_with_skills AS (
+                SELECT DISTINCT
+                    bj.role,
+                    bj.country,
+                    bj.seniority,
+                    bj.is_remote,
+                    js.skill_id,
+                    bj.job_id,
+                    bj.salary_midpoint
+                FROM base_jobs bj
+                JOIN job_skills js
+                    ON js.job_id = bj.job_id
+            ),
+            with_skill AS (
+                SELECT
+                    role,
+                    country,
+                    seniority,
+                    is_remote,
+                    skill_id,
+                    COUNT(DISTINCT job_id) AS jobs_with_skill,
+                    PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY salary_midpoint) AS salary_median_with_skill
+                FROM jobs_with_skills
+                GROUP BY role, country, seniority, is_remote, skill_id
+            ),
+            without_skill AS (
+                SELECT
+                    bj.role,
+                    bj.country,
+                    bj.seniority,
+                    bj.is_remote,
+                    s.skill_id,
+                    PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY bj.salary_midpoint) AS salary_median_without_skill
+                FROM base_jobs bj
+                JOIN (
+                    SELECT DISTINCT role, country, seniority, is_remote, skill_id
+                    FROM jobs_with_skills
+                ) s
+                  ON s.role = bj.role
+                 AND s.country = bj.country
+                 AND s.seniority = bj.seniority
+                 AND s.is_remote = bj.is_remote
+                WHERE NOT EXISTS (
+                    SELECT 1
+                    FROM job_skills js
+                    WHERE js.job_id = bj.job_id
+                      AND js.skill_id = s.skill_id
+                )
+                GROUP BY bj.role, bj.country, bj.seniority, bj.is_remote, s.skill_id
+            )
+            INSERT INTO market_skill_stats_v2 (
+                role,
+                country,
+                seniority,
+                is_remote,
+                skill_id,
+                jobs_with_skill,
+                jobs_total,
+                share_pct,
+                salary_median_with_skill,
+                salary_median_without_skill,
+                salary_delta,
+                updated_at
+            )
+            SELECT
+                ws.role,
+                ws.country,
+                ws.seniority,
+                ws.is_remote,
+                ws.skill_id,
+                ws.jobs_with_skill,
+                ms.jobs_total,
+                ROUND(100.0 * ws.jobs_with_skill::numeric / NULLIF(ms.jobs_total, 0), 2) AS share_pct,
+                ws.salary_median_with_skill,
+                wos.salary_median_without_skill,
+                CASE
+                    WHEN ws.salary_median_with_skill IS NOT NULL AND wos.salary_median_without_skill IS NOT NULL
+                        THEN ws.salary_median_with_skill - wos.salary_median_without_skill
+                    ELSE NULL
+                END AS salary_delta,
+                NOW() AS updated_at
+            FROM with_skill ws
+            JOIN market_slices ms
+              ON ms.role = ws.role
+             AND ms.country = ws.country
+             AND ms.seniority = ws.seniority
+             AND ms.is_remote = ws.is_remote
+            LEFT JOIN without_skill wos
+              ON wos.role = ws.role
+             AND wos.country = ws.country
+             AND wos.seniority = ws.seniority
+             AND wos.is_remote = ws.is_remote
+             AND wos.skill_id = ws.skill_id;
+            """
+        )
+        summary["market_skill_stats_v2_updated"] = cur.rowcount
+        logger.info("market_skill_stats_v2: %s rows inserted", cur.rowcount)
+
+        conn.commit()
+
+        if etl_run_id is not None:
+            with get_connection() as meta_conn:
+                update_etl_run_progress(
+                    meta_conn,
+                    etl_run_id,
+                    aggregates_updated=True,
+                )
+                meta_conn.commit()
+
+    except Exception as e:
+        summary["status"] = "failed"
+        summary["error"] = str(e)
+        logger.error("Aggregate v2 step failed: %s", e)
+
+        if conn is not None:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+
+        raise
+
+    finally:
+        if cur is not None:
+            try:
+                cur.close()
+            except Exception:
+                pass
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+    logger.info("Aggregate v2 step complete: %s", summary)
+    return summary
+
 # Локальный запуск для ручной проверки
 if __name__ == "__main__":
     result = run_aggregate_step()
-    print(result)
+    print(result)  
+    

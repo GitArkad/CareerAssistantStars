@@ -1,20 +1,3 @@
-"""
-load_to_db.py
-
-Airflow task helper для загрузки cleaned snapshot в PostgreSQL.
-
-Роль файла в пайплайне:
-- скачать cleaned snapshot из S3/MinIO
-- привести строки DataFrame к формату, который ожидает db_loader.py
-- собрать file-level manifest records
-- передать manifest + curated records в единый DB loader
-
-Важно:
-- raw payload вакансий остаётся в S3/MinIO, не переносится в PostgreSQL
-- ingestion_manifest здесь формируется на УРОВНЕ ФАЙЛОВ, а не по строкам
-- для корректной связи parse -> clean -> load желательно передавать raw_s3_keys из task_parse
-"""
-
 from __future__ import annotations
 
 import ast
@@ -28,6 +11,7 @@ import pandas as pd
 
 logger = logging.getLogger(__name__)
 
+# Колонки со списками
 LIST_COLUMNS = [
     "key_skills",
     "skills_extracted",
@@ -37,7 +21,7 @@ LIST_COLUMNS = [
     "methodologies",
     "spoken_languages",
 ]
-
+# Колонки со списками
 TEXT_COLUMNS = [
     "benefits",
     "education",
@@ -46,7 +30,7 @@ TEXT_COLUMNS = [
     "security_clearance",
 ]
 
-
+# Нормализация list-like значений
 def _parse_list_like(value: Any) -> list[str]:
     if value is None:
         return []
@@ -79,7 +63,7 @@ def _parse_list_like(value: Any) -> list[str]:
         return [part.strip() for part in text.split(",") if part.strip()]
     return [str(value).strip()] if str(value).strip() else []
 
-
+# Замена NaN на None
 def _none_if_nan(value: Any) -> Any:
     if value is None:
         return None
@@ -87,7 +71,7 @@ def _none_if_nan(value: Any) -> Any:
         return None
     return value
 
-
+# Нормализация boolean значений
 def _normalize_bool(value: Any, default: bool = False) -> bool:
     if value is None:
         return default
@@ -102,11 +86,11 @@ def _normalize_bool(value: Any, default: bool = False) -> bool:
         return False
     return default
 
-
+# Безопасное имя source для ключей и файлов
 def _safe_source(source: str) -> str:
     return str(source).replace(".", "_").replace(" ", "_").replace("/", "_")
 
-
+# Подготовка одной записи DataFrame к формату db_loader
 def _prepare_record_dict(row: pd.Series) -> dict[str, Any]:
     d = {k: _none_if_nan(v) for k, v in row.to_dict().items()}
 
@@ -162,24 +146,23 @@ def _prepare_record_dict(row: pd.Series) -> dict[str, Any]:
 
     return d
 
-
+# Разбор clean key на дату и run_id
 def _extract_clean_key_parts(clean_s3_key: str) -> tuple[Optional[str], Optional[str]]:
     parts = str(clean_s3_key).strip("/").split("/")
     if len(parts) >= 4 and parts[0] == "clean":
         return parts[1], parts[2]
     return None, None
 
-
+# Разбор clean key на дату и run_id
 def _extract_raw_key_parts(raw_s3_key: str) -> tuple[Optional[str], Optional[str], Optional[str]]:
     parts = str(raw_s3_key).strip("/").split("/")
-    # raw/{date}/{run_id}/{safe_source}.csv
     if len(parts) >= 4 and parts[0] == "raw":
         source_file = parts[3]
         source_safe = source_file[:-4] if source_file.endswith(".csv") else source_file
         return parts[1], parts[2], source_safe
     return None, None, None
 
-
+# Построение стабильного content_hash
 def _build_content_hash(d: dict[str, Any]) -> str:
     stable = "|".join(
         [
@@ -193,7 +176,7 @@ def _build_content_hash(d: dict[str, Any]) -> str:
     )
     return hashlib.sha1(stable.encode("utf-8")).hexdigest()
 
-
+# Построение стабильного content_hash
 def _build_raw_s3_key(date_part: Optional[str], run_part: Optional[str], source: Any) -> Optional[str]:
     if not date_part or not run_part or not source:
         return None
@@ -202,7 +185,7 @@ def _build_raw_s3_key(date_part: Optional[str], run_part: Optional[str], source:
         return None
     return f"raw/{date_part}/{run_part}/{_safe_source(source_name)}.csv"
 
-
+# Построение стабильного content_hash
 def _raw_key_map(raw_s3_keys: Optional[list[str]]) -> dict[str, str]:
     mapping: dict[str, str] = {}
     for key in raw_s3_keys or []:
@@ -211,7 +194,7 @@ def _raw_key_map(raw_s3_keys: Optional[list[str]]) -> dict[str, str]:
             mapping[source_safe] = key
     return mapping
 
-
+# Построение стабильного content_hash
 def build_file_manifest_records(
     df: pd.DataFrame,
     clean_s3_key: str,
@@ -255,7 +238,7 @@ def build_file_manifest_records(
             )
         return records
 
-    # manual / fallback mode without raw_s3_keys
+    #  Fallback режим без raw_s3_keys
     for source_safe, clean_count in counts.items():
         source_name = source_names.get(source_safe, source_safe)
         records.append(
@@ -279,7 +262,7 @@ def build_file_manifest_records(
         )
     return records
 
-
+# Преобразование DataFrame в curated records
 def df_to_curated_records(
     df: pd.DataFrame,
     clean_s3_key: str,
@@ -303,7 +286,7 @@ def df_to_curated_records(
 
     return records
 
-
+# Преобразование DataFrame в curated records
 def resolve_clean_s3_key(date_str: Optional[str] = None, clean_s3_key: Optional[str] = None) -> str:
     from src.loaders.s3_storage import key_exists, latest_clean_key, list_keys
 
@@ -329,7 +312,7 @@ def resolve_clean_s3_key(date_str: Optional[str] = None, clean_s3_key: Optional[
         "Could not resolve cleaned dataset key. Pass clean_s3_key from task_clean or ensure clean/latest exists."
     )
 
-
+# Основной шаг загрузки cleaned snapshot в PostgreSQL
 def run_load_step(
     date_str: Optional[str] = None,
     clean_s3_key: Optional[str] = None,
@@ -364,6 +347,6 @@ def run_load_step(
     logger.info("DB load completed: %s", summary)
     return summary
 
-
+# Локальный запуск для проверки
 if __name__ == "__main__":
     print(run_load_step())

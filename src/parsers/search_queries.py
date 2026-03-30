@@ -1,24 +1,8 @@
-"""
-search_queries.py
-
-Exhaustive IT job search queries — English + Russian.
-Keeps the full master list, but also supports a focused/core mode for
-regular production-style runs with less noise and lower API load.
-
-Usage:
-    from search_queries import QUERIES_EN, QUERIES_RU, ALL_QUERIES_EN
-    from search_queries import CATEGORY_MAP, get_queries_for_source
-    from search_queries import CORE_CATEGORIES, get_core_queries_for_source
-"""
-
 from __future__ import annotations
 
 import os
 
-# ============================================================================
-# ENGLISH QUERIES (for Adzuna, USAJobs, Himalayas, Arbeitnow, ATS APIs)
-# ============================================================================
-
+# Английские запросы для внешних источников.
 QUERIES_EN = {
     # ── Data Science & ML ──
     "data_science": [
@@ -226,10 +210,7 @@ QUERIES_EN = {
     ],
 }
 
-# ============================================================================
-# RUSSIAN QUERIES (for HH.ru — Russia, Belarus, Kazakhstan, CIS)
-# ============================================================================
-
+# Русские запросы для HH.ru и похожих источников
 QUERIES_RU = {
     "data_science": [
         "Data Scientist", "Дата сайентист", "Специалист по данным",
@@ -343,11 +324,7 @@ QUERIES_RU = {
     ],
 }
 
-# ============================================================================
-# FOCUSED / CORE CATEGORIES
-# Keep full master list above, but use core categories for regular recurring runs.
-# ============================================================================
-
+# Основные категории для регулярных запусков
 CORE_CATEGORIES = [
     "data_science",
     "machine_learning",
@@ -384,12 +361,8 @@ LOW_PRIORITY_CATEGORIES = [
     "1c",
 ]
 
-# ============================================================================
-# DERIVED LISTS
-# ============================================================================
-
+# Собирает плоский список запросов без дублей
 def _flatten(query_dict: dict[str, list[str]]) -> list[str]:
-    """Flatten category dict to a deduplicated list preserving order."""
     seen = set()
     result: list[str] = []
     for queries in query_dict.values():
@@ -400,7 +373,7 @@ def _flatten(query_dict: dict[str, list[str]]) -> list[str]:
                 result.append(q)
     return result
 
-
+# Возвращает только выбранные категории
 def _subset(query_dict: dict[str, list[str]], categories: list[str]) -> dict[str, list[str]]:
     return {cat: query_dict[cat] for cat in categories if cat in query_dict}
 
@@ -412,22 +385,14 @@ ALL_QUERIES_COMBINED = _flatten({**QUERIES_EN, **QUERIES_RU})
 CORE_QUERIES_EN = _flatten(_subset(QUERIES_EN, CORE_CATEGORIES))
 CORE_QUERIES_RU = _flatten(_subset(QUERIES_RU, CORE_CATEGORIES))
 
-# Category map: query -> category
+# Карта соответствия: запрос -> категория
 CATEGORY_MAP: dict[str, str] = {}
 for cat, queries in {**QUERIES_EN, **QUERIES_RU}.items():
     for q in queries:
         CATEGORY_MAP.setdefault(q, cat)
 
-
+# Возвращает список запросов под конкретный источник
 def get_queries_for_source(source: str, mode: str | None = None) -> list[str]:
-    """
-    Get the appropriate query list for a given source.
-
-    mode:
-      - "all": full master list (backward-compatible wide coverage)
-      - "core": focused subset for regular scheduled runs
-    If omitted, reads JOB_QUERY_MODE env var; defaults to "all".
-    """
     mode = (mode or os.getenv("JOB_QUERY_MODE", "all")).strip().lower()
 
     if mode not in {"all", "core"}:
@@ -443,19 +408,16 @@ def get_queries_for_source(source: str, mode: str | None = None) -> list[str]:
 
     return _apply_source_cap(base, source, mode=mode)
 
-
+# Возвращает сокращенный набор запросов
 def get_core_queries_for_source(source: str) -> list[str]:
-    """Convenience wrapper for focused recurring runs."""
     return get_queries_for_source(source, mode="core")
 
-
+# Возвращает полный набор запросов
 def get_all_queries_for_source(source: str) -> list[str]:
-    """Convenience wrapper for exhaustive runs."""
     return get_queries_for_source(source, mode="all")
 
 
-# Conservative caps to avoid huge noisy runs.
-# Core mode is intentionally leaner for recurring scheduled ingestion.
+# Лимиты по числу запросов для каждого источника
 MAX_QUERIES_PER_SOURCE = {
     "all": {
         "hh.ru": 120,
@@ -479,7 +441,7 @@ MAX_QUERIES_PER_SOURCE = {
     },
 }
 
-
+# Обрезает список запросов по лимиту источника
 def _apply_source_cap(queries: list[str], source: str, mode: str) -> list[str]:
     cap = MAX_QUERIES_PER_SOURCE.get(mode, {}).get(source)
     if not cap:
