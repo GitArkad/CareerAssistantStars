@@ -1,7 +1,7 @@
 BEGIN;
 
 INSERT INTO skill_synonyms (canonical_name, synonym, category) VALUES
-    -- Programming languages
+    -- Языки программирования
     ('Python','python','programming'),
     ('Python','py','programming'),
     ('Python','python3','programming'),
@@ -19,7 +19,7 @@ INSERT INTO skill_synonyms (canonical_name, synonym, category) VALUES
     ('Bash','bash','programming'),
     ('Bash','shell','programming'),
 
-    -- Databases
+    -- Базы данных
     ('SQL','sql','database'),
     ('PostgreSQL','postgresql','database'),
     ('PostgreSQL','postgres','database'),
@@ -32,7 +32,7 @@ INSERT INTO skill_synonyms (canonical_name, synonym, category) VALUES
     ('BigQuery','bigquery','database'),
     ('BigQuery','google bigquery','database'),
 
-    -- Cloud
+    -- Облака
     ('AWS','aws','cloud'),
     ('AWS','amazon web services','cloud'),
     ('AWS','aws cloud','cloud'),
@@ -41,7 +41,7 @@ INSERT INTO skill_synonyms (canonical_name, synonym, category) VALUES
     ('GCP','google cloud','cloud'),
     ('GCP','google cloud platform','cloud'),
 
-    -- DevOps / Infra
+    -- DevOps и инфраструктура
     ('Docker','docker','devops'),
     ('Kubernetes','kubernetes','devops'),
     ('Kubernetes','k8s','devops'),
@@ -62,7 +62,7 @@ INSERT INTO skill_synonyms (canonical_name, synonym, category) VALUES
     ('dbt','dbt core','bigdata'),
     ('Databricks','databricks','bigdata'),
 
-    -- Machine Learning libraries / tools
+    -- ML-библиотеки и инструменты
     ('PyTorch','pytorch','ml'),
     ('TensorFlow','tensorflow','ml'),
     ('Scikit-learn','sklearn','ml'),
@@ -74,7 +74,7 @@ INSERT INTO skill_synonyms (canonical_name, synonym, category) VALUES
     ('LightGBM','lightgbm','ml'),
     ('MLflow','mlflow','ml'),
 
-    -- ML concepts
+    -- ML концепции
     ('Machine Learning','machine learning','ml_concept'),
     ('Deep Learning','deep learning','ml_concept'),
     ('Natural Language Processing','natural language processing','ml_concept'),
@@ -129,8 +129,11 @@ INSERT INTO skill_synonyms (canonical_name, synonym, category) VALUES
     ('Microservices','microservices','methodology'),
     ('ETL','etl','methodology'),
     ('ELT','elt','methodology')
+
+-- Обновляем запись, если synonym уже существует
 ON CONFLICT (synonym) DO UPDATE
 SET canonical_name = EXCLUDED.canonical_name,
     category = EXCLUDED.category;
 
 COMMIT;
+

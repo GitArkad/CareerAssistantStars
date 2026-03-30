@@ -98,7 +98,7 @@ def _normalize_bool(value: Any, default: bool = False) -> bool:
     text = str(value).strip().lower()
     if text in {"1", "true", "t", "yes", "y"}:
         return True
-    if text in {"0", "false", "f", "no", "n", ""}:
+    if text in {"0", "false", "f", "no", "n", "", "onsite", "on-site", "office"}:
         return False
     return default
 

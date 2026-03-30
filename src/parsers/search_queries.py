@@ -69,7 +69,7 @@ QUERIES_EN = {
 
     # ── Analytics & BI ──
     "analytics": [
-        "Data Analyst", "Senior Data Analyst", "Junior Data Analyst",
+        "Data Analyst", "Analyst", "Senior Data Analyst", "Junior Data Analyst",
         "Business Analyst", "Product Analyst", "Marketing Analyst",
         "Financial Analyst", "Operations Analyst", "Growth Analyst",
         "Pricing Analyst", "Risk Analyst", "Fraud Analyst",
@@ -180,7 +180,9 @@ QUERIES_EN = {
         "Embedded Engineer", "Embedded Software Engineer",
         "Firmware Engineer", "IoT Engineer",
         "FPGA Engineer", "Hardware Engineer",
+        "Firmware Developer", "Embedded Developer",
         "Embedded Linux Developer", "Robotics Engineer",
+        "Flight Software Engineer", "Flight Sciences Engineer", "Avionics Engineer"
     ],
 
     # ── Game Development ──

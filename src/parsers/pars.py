@@ -31,6 +31,9 @@ TARGET_PER_QUERY = int(os.getenv("TARGET_PER_QUERY", "120"))
 REQUEST_TIMEOUT = int(os.getenv("REQUEST_TIMEOUT_SECONDS", "20"))
 KEEP_RAW_JSON = os.getenv("KEEP_RAW_JSON", "0").strip().lower() in {"1", "true", "yes", "y"}
 HH_DETAIL_FETCH_LIMIT = int(os.getenv("HH_DETAIL_FETCH_LIMIT", "0"))
+USAJOBS_TARGET_PER_QUERY = int(os.getenv("USAJOBS_TARGET_PER_QUERY", "600"))
+GREENHOUSE_MAX_COMPANIES = int(os.getenv("GREENHOUSE_MAX_COMPANIES", "0"))
+LEVER_MAX_COMPANIES = int(os.getenv("LEVER_MAX_COMPANIES", "0"))
 
 logging.basicConfig(
     level=logging.INFO,
@@ -83,6 +86,51 @@ ADZUNA_C = [
     ("sg", "Singapore", "SGD"),
 ]
 
+RAW_COLUMNS = [
+    "job_id",
+    "source_job_id",
+    "title",
+    "description",
+    "company_name",
+    "department",
+    "salary_from",
+    "salary_to",
+    "currency",
+    "salary_period",
+    "location",
+    "country",
+    "remote",
+    "remote_type",
+    "employment_type",
+    "published_at",
+    "source",
+    "url",
+    "search_query",
+    "parsed_at",
+    "requirements",
+    "responsibilities",
+    "nice_to_have",
+    "experience_level",
+    "seniority_normalized",
+    "years_experience_min",
+    "years_experience_max",
+    "key_skills",
+    "skills_extracted",
+    "skills_normalized",
+    "tech_stack_tags",
+    "tools",
+    "methodologies",
+    "visa_sponsorship",
+    "relocation",
+    "benefits",
+    "industry",
+    "company_size",
+    "education",
+    "certifications",
+    "spoken_languages",
+    "equity_bonus",
+    "security_clearance",
+]
 
 def _utcnow_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -124,17 +172,73 @@ def _match_token(text: str, token: str) -> bool:
 def _yrs(text: Optional[str]):
     if not text:
         return None, None
+
     low = text.lower()
-    for pat in [
-        r"(\d+)\s*[-–—]\s*(\d+)\s*(?:лет|years?|год)",
-        r"(?:от|from)\s*(\d+)\s*(?:лет|years?)",
-        r"(\d+)\+\s*(?:лет|years?)",
-        r"(\d+)\s*(?:лет|years?|год)",
-    ]:
-        m = re.search(pat, low)
-        if m:
-            g = m.groups()
-            return (int(g[0]), int(g[1])) if len(g) == 2 else (int(g[0]), int(g[0]))
+
+    positive_patterns = [
+        r"(\d{1,2})\s*[-–—]\s*(\d{1,2})\s*(?:years?\s+of\s+experience|yrs?\s+of\s+experience|лет\s+опыта|года\s+опыта|год\s+опыта)",
+        r"(?:от|from|at\s+least|minimum\s+of|min\.?|over|more\s+than)\s*(\d{1,2})\+?\s*(?:years?\s+of\s+experience|years?|yrs?|лет\s+опыта|лет)",
+        r"(\d{1,2})\+\s*(?:years?\s+of\s+experience|years?|yrs?|лет\s+опыта|лет)",
+        r"(\d{1,2})\s*(?:years?\s+of\s+experience|years?\s+experience|yrs?\s+experience|лет\s+опыта|года\s+опыта|год\s+опыта)",
+    ]
+
+    negative_context = [
+        r"\bour company\b",
+        r"\bcompany\b",
+        r"\borganization\b",
+        r"\bbusiness\b",
+        r"\bheritage\b",
+        r"\bhistory\b",
+        r"\btradition\b",
+        r"\bfounded\b",
+        r"\bsince\s+\d{4}\b",
+        r"\bfor\s+over\s+\d+\s+years\b",
+        r"\bfor\s+more\s+than\s+\d+\s+years\b",
+        r"\bserving\b",
+        r"\bleading\b",
+        r"\bglobal leader\b",
+    ]
+
+    strong_positive_hints = [
+        r"\bexperience\b",
+        r"\brequirements?\b",
+        r"\brequired\b",
+        r"\bmust\s+have\b",
+        r"\bminimum\b",
+        r"\bat\s+least\b",
+        r"\bcommercial\b",
+        r"\bhands[- ]on\b",
+    ]
+
+    for pat in positive_patterns:
+        m = re.search(pat, low, flags=re.I | re.S)
+        if not m:
+            continue
+
+        nums = [int(g) for g in m.groups() if g is not None]
+        if not nums:
+            continue
+
+        if len(nums) == 1:
+            y1 = y2 = nums[0]
+        else:
+            y1, y2 = nums[0], nums[1]
+
+        if y1 <= 0 or y2 <= 0:
+            continue
+        if y1 > 25 or y2 > 25:
+            continue
+
+        start, end = m.span()
+        window = low[max(0, start - 120): min(len(low), end + 120)]
+        negative = any(re.search(p, window, flags=re.I) for p in negative_context)
+        positive = any(re.search(p, window, flags=re.I) for p in strong_positive_hints)
+
+        if negative and not positive:
+            continue
+
+        return (y1, y2)
+
     return None, None
 
 
@@ -161,17 +265,51 @@ def _jsonable(value: Any) -> Any:
     return str(value)
 
 def _normalize_text(value: Optional[str]) -> str:
-    return (value or "").strip().lower()
+    value = (value or "").strip().lower()
+    value = re.sub(r"[^a-z0-9+#./\s-]+", " ", value)
+    value = re.sub(r"\s+", " ", value).strip()
+    return value
+
+
+def _query_tokens(query: str) -> list[str]:
+    q = _normalize_text(query)
+    if not q:
+        return []
+
+    stop = {
+        "and", "or", "of", "to", "for", "with", "in", "on", "at", "the", "a", "an",
+        "remote", "hybrid", "office", "engineer", "developer", "specialist",
+    }
+
+    return [t for t in q.split() if len(t) >= 2 and t not in stop]
 
 
 def _matches_query(text: str, query: str) -> bool:
-    return _normalize_text(query) in _normalize_text(text)
+    hay = _normalize_text(text)
+    q = _normalize_text(query)
+
+    if not hay or not q:
+        return False
+
+    if q in hay:
+        return True
+
+    tokens = _query_tokens(query)
+    if tokens and all(tok in hay for tok in tokens):
+        return True
+
+    if len(tokens) >= 2:
+        matched = sum(1 for tok in tokens if tok in hay)
+        if matched / len(tokens) >= 0.66:
+            return True
+
+    return False
 
 
 def _first_matching_query(title: Optional[str], description: Optional[str], queries: list[str]) -> Optional[str]:
-    haystack = f"{title or ''} {description or ''}".lower()
+    haystack = f"{title or ''} {description or ''}"
     for q in queries:
-        if q.lower() in haystack:
+        if _matches_query(haystack, q):
             return q
     return None
 
@@ -188,12 +326,39 @@ class BaseParser(ABC):
     def _sl(self, value):
         return value if isinstance(value, list) else []
 
+    def _validate_record_schema(self, rec: dict) -> Optional[dict]:
+        if not isinstance(rec, dict):
+            return None
+
+        fixed = {col: rec.get(col) for col in RAW_COLUMNS}
+
+        # обязательные поля
+        if not fixed.get("title"):
+            return None
+
+        fixed["source"] = self.source_name
+
+        # защита от мусора/сдвигов
+        for col, val in fixed.items():
+            if isinstance(val, (dict, list)) and col not in {"key_skills", "skills_extracted", "skills_normalized", "tech_stack_tags", "tools", "methodologies", "spoken_languages"}:
+                fixed[col] = json.dumps(val, ensure_ascii=False, default=str)
+
+        # примитивная sanity-check логика
+        if fixed.get("source") not in {
+            "hh.ru", "greenhouse.com", "lever.co", "ashbyhq.com",
+            "adzuna.com", "usajobs.gov", "arbeitnow.com", "himalayas.app"
+        }:
+            return None
+
+        return fixed
+
+
     def _rec(self, **kw):
         desc = kw.get("description") or ""
         req = kw.get("requirements") or ""
         full = f"{kw.get('title') or ''} {desc} {req}"
         remote = bool(kw.get("remote", False))
-        remote_type = kw.get("remote_type") or ("remote" if remote else "onsite")
+        remote_type = kw.get("remote_type") or ("remote" if remote else "office")
         source_job_id = kw.get("source_job_id")
         url = kw.get("url")
         title = kw.get("title")
@@ -253,6 +418,10 @@ class BaseParser(ABC):
         }
 
     def _add(self, record: dict):
+        record = self._validate_record_schema(record)
+        if not record:
+            return
+
         job_id = record["job_id"]
         if job_id not in self.collected_ids:
             self.vacancies.append(record)
@@ -260,14 +429,26 @@ class BaseParser(ABC):
 
     def to_df(self) -> pd.DataFrame:
         if not self.vacancies:
-            return pd.DataFrame()
+            return pd.DataFrame(columns=RAW_COLUMNS)
+
         df = pd.DataFrame(self.vacancies)
-        list_cols = ["key_skills", "skills_extracted", "skills_normalized", "tech_stack_tags", "tools", "methodologies", "spoken_languages"]
+
+        for col in RAW_COLUMNS:
+            if col not in df.columns:
+                df[col] = None
+
+        df = df[RAW_COLUMNS]
+
+        list_cols = [
+            "key_skills", "skills_extracted", "skills_normalized",
+            "tech_stack_tags", "tools", "methodologies", "spoken_languages"
+        ]
         for col in list_cols:
             if col in df.columns:
-                df[col] = df[col].apply(lambda x: json.dumps(x, ensure_ascii=False) if isinstance(x, list) else x)
-        if "raw_json" in df.columns:
-            df["raw_json"] = df["raw_json"].apply(lambda x: json.dumps(x, ensure_ascii=False, default=str) if isinstance(x, (dict, list)) else x)
+                df[col] = df[col].apply(
+                    lambda x: json.dumps(x, ensure_ascii=False) if isinstance(x, list) else x
+                )
+
         return df
 
 class QueryParserBase(BaseParser, ABC):
@@ -297,6 +478,8 @@ class CatalogParserBase(BaseParser, ABC):
     def __init__(self, src: str):
         super().__init__(src)
         self._catalog_cache = None
+        self.catalog_load_retries = int(os.getenv("CATALOG_LOAD_RETRIES", "1"))
+        self.catalog_retry_sleep = float(os.getenv("CATALOG_RETRY_SLEEP", "2"))
 
     @abstractmethod
     def load_catalog_once(self) -> list[dict]:
@@ -306,11 +489,32 @@ class CatalogParserBase(BaseParser, ABC):
     def raw_to_record(self, raw_job: dict, matched_query: Optional[str]) -> Optional[dict]:
         raise NotImplementedError
 
+    def _load_catalog_with_retries(self) -> list[dict]:
+        last_error: Optional[Exception] = None
+        for attempt in range(1, self.catalog_load_retries + 2):
+            try:
+                return self.load_catalog_once() or []
+            except Exception as e:
+                last_error = e
+                logger.warning(
+                    "[%s] load_catalog_once failed attempt=%s/%s: %s",
+                    self.source_name,
+                    attempt,
+                    self.catalog_load_retries + 1,
+                    e,
+                )
+                if attempt <= self.catalog_load_retries:
+                    time.sleep(self.catalog_retry_sleep * attempt)
+
+        if last_error is not None:
+            raise last_error
+        return []
+
     def run(self, keywords=None, target=MAX_TOTAL_PER_SOURCE):
         keywords = keywords or get_queries_for_source(self.source_name)
         logger.info("[%s] catalog-mode, %s queries", self.source_name, len(keywords))
 
-        catalog = self.load_catalog_once()
+        catalog = self._load_catalog_with_retries()
         if not catalog:
             logger.info("[%s] empty catalog", self.source_name)
             return
@@ -354,7 +558,11 @@ class HHParser(QueryParserBase):
             return None
         for attempt in range(3):
             try:
-                r = requests.get(f"https://api.hh.ru/vacancies/{vacancy_id}", headers=self.headers, timeout=REQUEST_TIMEOUT)
+                r = requests.get(
+                    f"https://api.hh.ru/vacancies/{vacancy_id}",
+                    headers=self.headers,
+                    timeout=REQUEST_TIMEOUT,
+                )
                 if r.status_code == 429:
                     time.sleep(4 * (attempt + 1))
                     continue
@@ -378,66 +586,118 @@ class HHParser(QueryParserBase):
         rem = self._sd(v.get("work_mode")).get("id") == "REMOTE" or "удален" in (sched.get("name") or "").lower()
         skills = [s.get("name") for s in self._sl(v.get("key_skills")) if s.get("name")]
         dept = self._sd(v.get("department")).get("name")
-        description = v.get("description") or " ".join(filter(None, [snippet.get("requirement"), snippet.get("responsibility")]))
+        description = v.get("description") or " ".join(
+            filter(None, [snippet.get("requirement"), snippet.get("responsibility")])
+        )
         requirements_text = "; ".join(skills) if skills else (snippet.get("requirement") or "")
         responsibilities_text = snippet.get("responsibility") or ""
         desc_text = str(description or "").lower()
         visa = True if any(w in desc_text for w in ["visa", "виза", "визовая"]) else None
-        relocation = True if any(w in desc_text for w in ["relocation", "релокац", "переезд"]) else None
+        relocation = True if any(w in desc_text for w in ["relocation", "релокац", "переезд"]) else False
         employment = self._sd(v.get("employment")).get("name") or sched.get("name")
         return self._rec(
             source_job_id=str(v.get("id") or ""),
-            title=v.get("name"), description=description, requirements=requirements_text,
+            title=v.get("name"),
+            description=description,
+            requirements=requirements_text,
             responsibilities=responsibilities_text,
-            company_name=emp.get("name"), department=dept,
-            salary_from=sal.get("from"), salary_to=sal.get("to"), currency=sal.get("currency"),
-            salary_period=None, experience_level=en, years_min=y1, years_max=y2,
-            key_skills=skills, location=area.get("name"), country=country,
-            remote=rem, remote_type="remote" if rem else "onsite",
-            employment_type=employment, published_at=v.get("published_at"),
-            url=v.get("alternate_url") or f"https://hh.ru/vacancy/{v.get('id')}", visa_sponsorship=visa, relocation=relocation,
-            search_query=keyword, raw_json=v,
+            company_name=emp.get("name"),
+            department=dept,
+            salary_from=sal.get("from"),
+            salary_to=sal.get("to"),
+            currency=sal.get("currency"),
+            salary_period=None,
+            experience_level=en,
+            years_min=y1,
+            years_max=y2,
+            key_skills=skills,
+            location=area.get("name"),
+            country=country,
+            remote=rem,
+            remote_type="remote" if rem else "office",
+            employment_type=employment,
+            published_at=v.get("published_at"),
+            url=v.get("alternate_url") or f"https://hh.ru/vacancy/{v.get('id')}",
+            visa_sponsorship=visa,
+            relocation=relocation,
+            search_query=keyword,
+            raw_json=v,
         )
 
-    def fetch(self, keyword, target, **kwargs):
-        res = []
-        areas = [(113, "Russia"), (1, "Russia"), (2, "Russia"), (88, "Belarus"), (160, "Kazakhstan"), (1005, "Ukraine"), (1002, "Uzbekistan")]
-        per_area_target = max(1, target // len(areas))
-        for area_id, country in areas:
-            if len(res) >= target:
-                break
-            area_count = 0
-            page = 0
-            while area_count < per_area_target and len(res) < target:
-                r = requests.get(
-                    "https://api.hh.ru/vacancies",
-                    params={"text": keyword, "area": area_id, "per_page": 100, "page": page},
-                    headers=self.headers,
-                    timeout=REQUEST_TIMEOUT,
-                )
-                if r.status_code != 200:
-                    break
-                data = r.json()
-                items = data.get("items", [])
-                if not items:
-                    break
-                for item in items:
-                    if area_count >= per_area_target or len(res) >= target:
-                        break
-                    vacancy = item
-                    if self.detail_fetch_limit > 0:
-                        detail = self._det(item.get("id"))
-                        if detail:
-                            vacancy = detail
-                    rec = self._p(vacancy, keyword, country)
-                    res.append(rec)
-                    area_count += 1
-                page += 1
-                if page >= data.get("pages", 0):
-                    break
-                time.sleep(0.35)
-        return res
+    def fetch(self, keyword: str, target: int) -> list[dict]:
+        areas = [113, 1, 2, 3, 4, 1001, 160]
+        res: list[dict] = []
+        page = 0
 
+        while len(res) < target:
+            params = {
+                "text": keyword,
+                "area": areas,
+                "per_page": 100,
+                "page": page,
+                "search_field": "name",
+                "only_with_salary": False,
+            }
+
+            r = requests.get(
+                "https://api.hh.ru/vacancies",
+                params=params,
+                headers=self.headers,
+                timeout=REQUEST_TIMEOUT,
+            )
+
+            if r.status_code == 403:
+                logger.warning("[hh.ru] HTTP 403. Likely temporary blocking or anti-bot response.")
+                break
+
+            r.raise_for_status()
+            data = r.json()
+            items = data.get("items", [])
+            if not items:
+                break
+
+            for j in items:
+                if len(res) >= target:
+                    break
+
+                sal = j.get("salary") or {}
+                req = self._sd(j.get("snippet")).get("requirement")
+                resp = self._sd(j.get("snippet")).get("responsibility")
+                desc = " ".join(x for x in [req, resp] if x)
+                y1, y2 = _yrs(desc)
+                addr = self._sd(j.get("address"))
+                area = self._sd(j.get("area"))
+
+                res.append(
+                    self._rec(
+                        source_job_id=str(j.get("id") or ""),
+                        title=j.get("name"),
+                        description=desc,
+                        company_name=self._sd(j.get("employer")).get("name"),
+                        salary_from=sal.get("from"),
+                        salary_to=sal.get("to"),
+                        currency=sal.get("currency"),
+                        location=addr.get("city") or area.get("name"),
+                        country="Russia" if area.get("id") == "113" else None,
+                        remote=("remote" in (j.get("schedule", {}) or {}).get("id", "")),
+                        remote_type=(j.get("schedule", {}) or {}).get("id"),
+                        published_at=j.get("published_at"),
+                        url=j.get("alternate_url"),
+                        search_query=keyword,
+                        years_min=y1,
+                        years_max=y2,
+                        raw_json=j,
+                    )
+                )
+
+            pages = data.get("pages", 0)
+            page += 1
+            if page >= pages:
+                break
+
+            time.sleep(0.25)
+
+        return res
 
 class AdzunaParser(QueryParserBase):
     def __init__(self, app_id, app_key):
@@ -456,30 +716,28 @@ class AdzunaParser(QueryParserBase):
             text = json.dumps(payload, ensure_ascii=False).lower()
         except Exception:
             text = (response.text or "").lower()
-        return any(x in text for x in [
-            "rate limit",
-            "too many requests",
-            "quota",
-            "exceeded",
-            "limit reached",
-        ])
+        return any(
+            x in text
+            for x in [
+                "rate limit",
+                "too many requests",
+                "quota",
+                "exceeded",
+                "limit reached",
+            ]
+        )
 
-    def fetch(self, keyword, target, **kwargs):
-        if self.auth_failed:
-            return []
-
-        res = []
-        per_country_target = max(1, target // len(ADZUNA_C))
+    def fetch(self, keyword: str, target: int) -> list[dict]:
+        res: list[dict] = []
 
         for country_code, country_name, default_currency in ADZUNA_C:
             if len(res) >= target or self.auth_failed:
                 break
 
             page = 1
-            country_count = 0
             rate_limit_hits = 0
 
-            while country_count < per_country_target and len(res) < target:
+            while len(res) < target:
                 try:
                     r = requests.get(
                         f"https://api.adzuna.com/v1/api/jobs/{country_code}/search/{page}",
@@ -494,7 +752,13 @@ class AdzunaParser(QueryParserBase):
                         timeout=REQUEST_TIMEOUT,
                     )
                 except requests.RequestException as e:
-                    logger.warning("[adzuna.com] %s %s page=%s request failed: %s", country_code, keyword, page, e)
+                    logger.warning(
+                        "[adzuna.com] %s %s page=%s request failed: %s",
+                        country_code,
+                        keyword,
+                        page,
+                        e,
+                    )
                     break
 
                 if r.status_code == 401:
@@ -510,12 +774,18 @@ class AdzunaParser(QueryParserBase):
                     sleep_for = self.base_sleep_seconds * min(rate_limit_hits, 6)
                     logger.warning(
                         "[adzuna.com] rate limit: country=%s query=%r page=%s retry=%s/%s sleep=%ss",
-                        country_code, keyword, page, rate_limit_hits, self.max_rate_limit_retries, sleep_for
+                        country_code,
+                        keyword,
+                        page,
+                        rate_limit_hits,
+                        self.max_rate_limit_retries,
+                        sleep_for,
                     )
                     if rate_limit_hits >= self.max_rate_limit_retries:
                         logger.warning(
                             "[adzuna.com] skip country due to repeated rate limits: country=%s query=%r",
-                            country_code, keyword
+                            country_code,
+                            keyword,
                         )
                         break
                     time.sleep(sleep_for)
@@ -524,7 +794,10 @@ class AdzunaParser(QueryParserBase):
                 if r.status_code != 200:
                     logger.warning(
                         "[adzuna.com] HTTP %s: country=%s query=%r page=%s",
-                        r.status_code, country_code, keyword, page
+                        r.status_code,
+                        country_code,
+                        keyword,
+                        page,
                     )
                     break
 
@@ -533,96 +806,154 @@ class AdzunaParser(QueryParserBase):
                 try:
                     jobs = r.json().get("results", [])
                 except Exception as e:
-                    logger.warning("[adzuna.com] bad json: country=%s query=%r page=%s err=%s", country_code, keyword, page, e)
+                    logger.warning(
+                        "[adzuna.com] bad json: country=%s query=%r page=%s err=%s",
+                        country_code,
+                        keyword,
+                        page,
+                        e,
+                    )
                     break
 
                 if not jobs:
                     break
 
                 for j in jobs:
-                    if country_count >= per_country_target or len(res) >= target:
+                    if len(res) >= target:
                         break
 
                     loc = self._sd(j.get("location"))
-                    y1, y2 = _yrs(j.get("description") or "")
                     desc = j.get("description") or ""
+                    y1, y2 = _yrs(desc)
                     remote = "remote" in desc.lower()
 
-                    res.append(self._rec(
-                        source_job_id=str(j.get("id") or ""),
-                        title=j.get("title"),
-                        description=desc,
-                        company_name=self._sd(j.get("company")).get("display_name"),
-                        salary_from=j.get("salary_min"),
-                        salary_to=j.get("salary_max"),
-                        currency=j.get("salary_currency") or default_currency,
-                        location=loc.get("display_name"),
-                        country=country_name,
-                        remote=remote,
-                        remote_type="remote" if remote else "onsite",
-                        published_at=j.get("created"),
-                        url=j.get("redirect_url"),
-                        search_query=keyword,
-                        years_min=y1,
-                        years_max=y2,
-                        raw_json=j,
-                    ))
-                    country_count += 1
+                    res.append(
+                        self._rec(
+                            source_job_id=str(j.get("id") or ""),
+                            title=j.get("title"),
+                            description=desc,
+                            company_name=self._sd(j.get("company")).get("display_name"),
+                            salary_from=j.get("salary_min"),
+                            salary_to=j.get("salary_max"),
+                            currency=j.get("salary_currency") or default_currency,
+                            location=loc.get("display_name"),
+                            country=country_name,
+                            remote=remote,
+                            remote_type="remote" if remote else "office",
+                            published_at=j.get("created"),
+                            url=j.get("redirect_url"),
+                            search_query=keyword,
+                            years_min=y1,
+                            years_max=y2,
+                            raw_json=j,
+                        )
+                    )
 
                 page += 1
                 time.sleep(0.5)
 
         return res
 
-
 class USAJobsParser(QueryParserBase):
     def __init__(self, api_key, email):
         super().__init__("usajobs.gov")
-        self.headers.update({"Host": "data.usajobs.gov", "User-Agent": email, "Authorization-Key": api_key})
+        self.headers.update({
+            "Host": "data.usajobs.gov",
+            "User-Agent": email,
+            "Authorization-Key": api_key,
+        })
+
+    def run(self, keywords=None, target=USAJOBS_TARGET_PER_QUERY):
+        super().run(keywords=keywords, target=target)
 
     def fetch(self, keyword, target, **kwargs):
         res = []
         page = 1
+        seen_ids = set()
+
         while len(res) < target:
-            r = requests.get("https://data.usajobs.gov/api/search", params={"Keyword": keyword, "ResultsPerPage": 250, "Page": page}, headers=self.headers, timeout=REQUEST_TIMEOUT)
+            r = requests.get(
+                "https://data.usajobs.gov/api/search",
+                params={
+                    "Keyword": keyword,
+                    "ResultsPerPage": 250,
+                    "Page": page,
+                },
+                headers=self.headers,
+                timeout=REQUEST_TIMEOUT,
+            )
             if r.status_code != 200:
+                logger.warning("[usajobs.gov] HTTP %s for keyword=%r page=%s", r.status_code, keyword, page)
                 break
+
             items = r.json().get("SearchResult", {}).get("SearchResultItems", [])
             if not items:
                 break
+
+            new_count = 0
             for item in items:
                 if len(res) >= target:
                     break
                 try:
                     j = self._sd(item.get("MatchedObjectDescriptor"))
+                    source_job_id = str(j.get("PositionID") or "")
+                    if source_job_id and source_job_id in seen_ids:
+                        continue
+                    if source_job_id:
+                        seen_ids.add(source_job_id)
+
                     locs = j.get("PositionLocationDisplay", []) or []
                     loc = "; ".join(locs) if isinstance(locs, list) else locs
                     det = self._sd(self._sd(j.get("UserArea")).get("Details"))
                     desc = det.get("JobSummary") or det.get("MajorDuties") or ""
                     rems = self._sl(j.get("PositionRemuneration"))
                     first_pay = self._sd(rems[0]) if rems else {}
+
                     res.append(self._rec(
-                        source_job_id=str(j.get("PositionID") or ""),
-                        title=j.get("PositionTitle"), description=desc, company_name=j.get("OrganizationName"),
-                        salary_from=first_pay.get("MinimumRange"), salary_to=first_pay.get("MaximumRange"), currency="USD",
-                        location=loc, country="United States", employment_type=self._sd(j.get("PositionSchedule")).get("Name"),
-                        remote=any(w in desc.lower() for w in ["remote", "telework", "work from home"]), published_at=j.get("PublicationStartDate"),
-                        url=j.get("PositionURI"), search_query=keyword, raw_json=j,
+                        source_job_id=source_job_id,
+                        title=j.get("PositionTitle"),
+                        description=desc,
+                        company_name=j.get("OrganizationName"),
+                        salary_from=first_pay.get("MinimumRange"),
+                        salary_to=first_pay.get("MaximumRange"),
+                        currency="USD",
+                        location=loc,
+                        country="United States",
+                        employment_type=self._sd(j.get("PositionSchedule")).get("Name"),
+                        remote=any(w in desc.lower() for w in ["remote", "telework", "work from home"]),
+                        published_at=j.get("PublicationStartDate"),
+                        url=j.get("PositionURI"),
+                        search_query=keyword,
+                        raw_json=j,
                     ))
+                    new_count += 1
                 except Exception as e:
                     logger.warning("USAJobs item parse failed: %s", e)
+
+            logger.info(
+                "[usajobs.gov] keyword=%r page=%s fetched=%s new=%s total=%s",
+                keyword, page, len(items), new_count, len(res)
+            )
+
+            if new_count == 0:
+                break
+
             page += 1
             time.sleep(0.5)
+
         return res
 
 
 class HimalayasParser(CatalogParserBase):
     def __init__(self):
         super().__init__("himalayas.app")
-        self.page_size = int(os.getenv("HIMALAYAS_PAGE_SIZE", "20"))
-        self.max_retries = int(os.getenv("HIMALAYAS_MAX_RETRIES", "2"))
-        self.retry_sleep = float(os.getenv("HIMALAYAS_RETRY_SLEEP", "2"))
-        self.page_sleep = float(os.getenv("HIMALAYAS_PAGE_SLEEP", "0.4"))
+        self.page_size = int(os.getenv("HIMALAYAS_PAGE_SIZE", "100"))
+        self.max_retries = int(os.getenv("HIMALAYAS_MAX_RETRIES", "1"))
+        self.retry_sleep = float(os.getenv("HIMALAYAS_RETRY_SLEEP", "1"))
+        self.page_sleep = float(os.getenv("HIMALAYAS_PAGE_SLEEP", "0.1"))
+        self.max_pages = int(os.getenv("HIMALAYAS_MAX_PAGES", "300"))
+        self.max_jobs = int(os.getenv("HIMALAYAS_MAX_JOBS", "15000"))
+        self.request_timeout = int(os.getenv("HIMALAYAS_REQUEST_TIMEOUT", "8"))
 
     def load_catalog_once(self):
         if self._catalog_cache is not None:
@@ -631,9 +962,11 @@ class HimalayasParser(CatalogParserBase):
         logger.info("[himalayas.app] loading catalog once for this run")
         jobs_all = []
         offset = 0
+        page_num = 0
 
-        while True:
+        while page_num < self.max_pages and len(jobs_all) < self.max_jobs:
             success = False
+            jobs = []
 
             for attempt in range(1, self.max_retries + 2):
                 try:
@@ -641,11 +974,14 @@ class HimalayasParser(CatalogParserBase):
                         "https://himalayas.app/jobs/api",
                         params={"offset": offset, "limit": self.page_size},
                         headers=self.headers,
-                        timeout=REQUEST_TIMEOUT,
+                        timeout=self.request_timeout,
                     )
 
                     if r.status_code != 200:
-                        logger.warning("[himalayas.app] HTTP %s at offset=%s", r.status_code, offset)
+                        logger.warning(
+                            "[himalayas.app] HTTP %s at offset=%s page=%s",
+                            r.status_code, offset, page_num + 1
+                        )
                         self._catalog_cache = jobs_all
                         return self._catalog_cache
 
@@ -656,8 +992,8 @@ class HimalayasParser(CatalogParserBase):
 
                 except requests.exceptions.Timeout:
                     logger.warning(
-                        "[himalayas.app] timeout at offset=%s retry=%s/%s",
-                        offset, attempt, self.max_retries + 1
+                        "[himalayas.app] timeout at offset=%s page=%s retry=%s/%s",
+                        offset, page_num + 1, attempt, self.max_retries + 1
                     )
                     if attempt <= self.max_retries:
                         time.sleep(self.retry_sleep)
@@ -670,7 +1006,18 @@ class HimalayasParser(CatalogParserBase):
                         return self._catalog_cache
 
                 except requests.RequestException as e:
-                    logger.warning("[himalayas.app] request failed at offset=%s err=%s", offset, e)
+                    logger.warning(
+                        "[himalayas.app] request failed at offset=%s page=%s err=%s",
+                        offset, page_num + 1, e
+                    )
+                    self._catalog_cache = jobs_all
+                    return self._catalog_cache
+
+                except ValueError as e:
+                    logger.warning(
+                        "[himalayas.app] bad json at offset=%s page=%s err=%s",
+                        offset, page_num + 1, e
+                    )
                     self._catalog_cache = jobs_all
                     return self._catalog_cache
 
@@ -679,24 +1026,62 @@ class HimalayasParser(CatalogParserBase):
                 return self._catalog_cache
 
             if not jobs:
+                logger.info("[himalayas.app] no more jobs at page=%s offset=%s", page_num + 1, offset)
                 break
 
             jobs_all.extend(jobs)
 
+            logger.info(
+                "[himalayas.app] page=%s fetched=%s total=%s",
+                page_num + 1, len(jobs), len(jobs_all)
+            )
+
+            if len(jobs_all) >= self.max_jobs:
+                jobs_all = jobs_all[: self.max_jobs]
+                logger.info("[himalayas.app] reached max_jobs=%s", self.max_jobs)
+                break
+
             if len(jobs) < self.page_size:
+                logger.info(
+                    "[himalayas.app] last partial page=%s fetched=%s < page_size=%s",
+                    page_num + 1, len(jobs), self.page_size
+                )
                 break
 
             offset += self.page_size
+            page_num += 1
             time.sleep(self.page_sleep)
 
-        logger.info("[himalayas.app] catalog loaded: %s jobs", len(jobs_all))
+        logger.info(
+            "[himalayas.app] catalog loaded: %s jobs, pages=%s",
+            len(jobs_all), page_num + 1
+        )
         self._catalog_cache = jobs_all
         return self._catalog_cache
 
     def raw_to_record(self, j: dict, matched_query: Optional[str]) -> Optional[dict]:
         title = j.get("title", "")
+        slug = (j.get("slug") or "").strip()
+        source_job_id = str(j.get("id") or slug or "").strip()
+
+        raw_url = (j.get("url") or "").strip()
+
+        # Если API отдал нормальный URL вакансии — используем его.
+        # Если отдал только домен сайта или пусто — строим стабильный surrogate URL.
+        if raw_url and raw_url not in {"https://himalayas.app", "http://himalayas.app"}:
+            final_url = raw_url
+        elif slug:
+            final_url = f"https://himalayas.app/jobs/{slug}"
+        elif source_job_id:
+            final_url = f"https://himalayas.app/jobs/id/{source_job_id}"
+        else:
+            # самый крайний случай: делаем стабильный URL из title+company
+            safe_title = re.sub(r"[^a-z0-9]+", "-", (title or "").lower()).strip("-")
+            safe_company = re.sub(r"[^a-z0-9]+", "-", (j.get("companyName") or "").lower()).strip("-")
+            final_url = f"https://himalayas.app/jobs/generated/{safe_company}-{safe_title}"[:500]
+
         return self._rec(
-            source_job_id=str(j.get("id") or j.get("slug") or ""),
+            source_job_id=source_job_id,
             title=title,
             description=j.get("description"),
             company_name=j.get("companyName"),
@@ -709,45 +1094,139 @@ class HimalayasParser(CatalogParserBase):
             remote_type="remote",
             employment_type=j.get("employmentType"),
             published_at=j.get("pubDate"),
-            url=j.get("url"),
+            url=final_url,
             search_query=matched_query,
             raw_json=j,
         )
 
 
-class ArbeitnowParser(QueryParserBase):
+class ArbeitnowParser(CatalogParserBase):
     def __init__(self):
         super().__init__("arbeitnow.com")
+        self.max_pages = int(os.getenv("ARBEITNOW_MAX_PAGES", "200"))
+        self.page_sleep = float(os.getenv("ARBEITNOW_PAGE_SLEEP", "0.6"))
+        self.max_retries = int(os.getenv("ARBEITNOW_MAX_RETRIES", "2"))
+        self.retry_sleep = float(os.getenv("ARBEITNOW_RETRY_SLEEP", "3"))
 
-    def fetch(self, keyword, target, **kwargs):
-        res = []
+    def load_catalog_once(self):
+        if self._catalog_cache is not None:
+            return self._catalog_cache
+
+        logger.info("[arbeitnow.com] loading catalog once for this run")
+        jobs_all = []
+        seen_ids = set()
         page = 1
-        while len(res) < target:
-            r = requests.get("https://www.arbeitnow.com/api/job-board-api", params={"page": page}, headers=self.headers, timeout=REQUEST_TIMEOUT)
-            if r.status_code != 200:
-                break
-            data = r.json()
-            jobs = data.get("data", [])
-            if not jobs:
-                break
-            for j in jobs:
-                title = j.get("title", "")
-                if keyword.lower() not in title.lower():
-                    continue
-                if len(res) >= target:
+
+        while page <= self.max_pages:
+            success = False
+            jobs = []
+
+            for attempt in range(1, self.max_retries + 2):
+                try:
+                    r = requests.get(
+                        "https://www.arbeitnow.com/api/job-board-api",
+                        params={"page": page},
+                        headers={
+                            **self.headers,
+                            "Referer": "https://www.arbeitnow.com/",
+                            "Accept": "application/json, text/plain, */*",
+                        },
+                        timeout=REQUEST_TIMEOUT,
+                    )
+
+                    if r.status_code == 403:
+                        logger.warning(
+                            "[arbeitnow.com] HTTP 403 at page=%s retry=%s/%s",
+                            page, attempt, self.max_retries + 1
+                        )
+                        if attempt <= self.max_retries:
+                            time.sleep(self.retry_sleep * attempt)
+                            continue
+                        self._catalog_cache = jobs_all
+                        return self._catalog_cache
+
+                    if r.status_code != 200:
+                        logger.warning("[arbeitnow.com] HTTP %s at page=%s", r.status_code, page)
+                        self._catalog_cache = jobs_all
+                        return self._catalog_cache
+
+                    payload = r.json() or {}
+                    jobs = payload.get("data", [])
+                    success = True
                     break
-                remote = bool(j.get("remote", False))
-                res.append(self._rec(
-                    source_job_id=str(j.get("slug") or j.get("id") or ""),
-                    title=title, description=j.get("description"), company_name=j.get("company_name"),
-                    location=j.get("location"), country=j.get("country"), remote=remote, remote_type="remote" if remote else "onsite",
-                    published_at=j.get("created_at"), url=j.get("url"), key_skills=j.get("tags", []), search_query=keyword, currency="EUR", raw_json=j,
-                ))
-            page += 1
-            if not data.get("links", {}).get("next"):
+
+                except requests.RequestException as e:
+                    logger.warning("[arbeitnow.com] request failed at page=%s err=%s", page, e)
+                    if attempt <= self.max_retries:
+                        time.sleep(self.retry_sleep * attempt)
+                        continue
+                    self._catalog_cache = jobs_all
+                    return self._catalog_cache
+
+                except ValueError as e:
+                    logger.warning("[arbeitnow.com] bad json at page=%s err=%s", page, e)
+                    self._catalog_cache = jobs_all
+                    return self._catalog_cache
+
+            if not success:
+                self._catalog_cache = jobs_all
+                return self._catalog_cache
+
+            if not jobs:
+                logger.info("[arbeitnow.com] no more jobs at page=%s", page)
                 break
-            time.sleep(0.8)
-        return res
+
+            new_count = 0
+            for j in jobs:
+                source_job_id = str(j.get("slug") or j.get("id") or "")
+                dedupe_key = source_job_id or json.dumps(j, sort_keys=True, ensure_ascii=False)
+                if dedupe_key in seen_ids:
+                    continue
+                seen_ids.add(dedupe_key)
+                jobs_all.append(j)
+                new_count += 1
+
+            logger.info(
+                "[arbeitnow.com] page=%s fetched=%s new=%s total=%s",
+                page, len(jobs), new_count, len(jobs_all)
+            )
+
+            if new_count == 0:
+                logger.info("[arbeitnow.com] stopping: repeated page at page=%s", page)
+                break
+
+            page += 1
+            time.sleep(self.page_sleep)
+
+        logger.info("[arbeitnow.com] catalog loaded: %s jobs", len(jobs_all))
+        self._catalog_cache = jobs_all
+        return self._catalog_cache
+
+    def raw_to_record(self, j: dict, matched_query: Optional[str]) -> Optional[dict]:
+        title = (j.get("title") or "").strip()
+        desc = (j.get("description") or "").strip()
+        tags = j.get("tags") or []
+        remote = any("remote" in str(t).lower() for t in tags)
+
+        return self._rec(
+            source_job_id=str(j.get("slug") or j.get("id") or ""),
+            title=title,
+            description=desc,
+            company_name=j.get("company_name"),
+            salary_from=None,
+            salary_to=None,
+            currency=None,
+            location=j.get("location"),
+            country=None,
+            remote=remote,
+            remote_type="remote" if remote else "office",
+            published_at=j.get("created_at"),
+            url=j.get("url"),
+            search_query=matched_query,
+            years_min=None,
+            years_max=None,
+            raw_json=j,
+        )
 
 
 class GreenhouseParser(CatalogParserBase):
@@ -760,8 +1239,13 @@ class GreenhouseParser(CatalogParserBase):
 
         logger.info("[greenhouse.com] loading catalog once for this run")
         jobs_all = []
+        companies = list(get_active_companies("greenhouse"))
+        if GREENHOUSE_MAX_COMPANIES > 0:
+            companies = companies[:GREENHOUSE_MAX_COMPANIES]
 
-        for company in get_active_companies("greenhouse"):
+        logger.info("[greenhouse.com] active companies: %s", len(companies))
+
+        for idx, company in enumerate(companies, start=1):
             try:
                 r = requests.get(
                     f"https://boards-api.greenhouse.io/v1/boards/{company}/jobs",
@@ -779,17 +1263,16 @@ class GreenhouseParser(CatalogParserBase):
                     continue
 
                 jobs = r.json().get("jobs", [])
-                if not jobs:
-                    reset_fail_count("greenhouse", company)
-                    continue
-
                 reset_fail_count("greenhouse", company)
 
                 for j in jobs:
                     j["_company"] = company
                     jobs_all.append(j)
 
-                time.sleep(0.3)
+                if idx % 50 == 0:
+                    logger.info("[greenhouse.com] companies=%s/%s jobs=%s", idx, len(companies), len(jobs_all))
+
+                time.sleep(0.2)
 
             except requests.exceptions.Timeout:
                 mark_inactive("greenhouse", company, "timeout")
@@ -830,8 +1313,13 @@ class LeverParser(CatalogParserBase):
 
         logger.info("[lever.co] loading catalog once for this run")
         jobs_all = []
+        companies = list(get_active_companies("lever"))
+        if LEVER_MAX_COMPANIES > 0:
+            companies = companies[:LEVER_MAX_COMPANIES]
 
-        for company in get_active_companies("lever"):
+        logger.info("[lever.co] active companies: %s", len(companies))
+
+        for idx, company in enumerate(companies, start=1):
             try:
                 r = requests.get(
                     f"https://api.lever.co/v0/postings/{company}",
@@ -856,7 +1344,10 @@ class LeverParser(CatalogParserBase):
                     j["_company"] = company
                     jobs_all.append(j)
 
-                time.sleep(0.3)
+                if idx % 50 == 0:
+                    logger.info("[lever.co] companies=%s/%s jobs=%s", idx, len(companies), len(jobs_all))
+
+                time.sleep(0.2)
 
             except requests.exceptions.Timeout:
                 mark_inactive("lever", company, "timeout")
@@ -872,14 +1363,22 @@ class LeverParser(CatalogParserBase):
         cats = self._sd(j.get("categories"))
         desc = j.get("descriptionPlain") or j.get("description") or ""
 
+        dept = (
+            cats.get("department")
+            or cats.get("team")
+            or cats.get("group")
+            or None
+        )
+
         return self._rec(
             source_job_id=str(j.get("id") or ""),
             title=j.get("text"),
             description=desc,
             company_name=j.get("_company"),
+            department=dept,
             location=cats.get("location"),
             employment_type=cats.get("commitment"),
-            published_at=j.get("createdAt"),
+            published_at=None,
             url=j.get("hostedUrl"),
             search_query=matched_query,
             raw_json=j,
@@ -889,42 +1388,158 @@ class AshbyParser(QueryParserBase):
     def __init__(self):
         super().__init__("ashbyhq.com")
 
-    def fetch(self, keyword, target, **kwargs):
-        res = []
-        kl = keyword.lower()
-        for company in get_active_companies("ashby"):
+    def fetch_company_jobs(self, slug: str) -> list[dict]:
+        url = "https://jobs.ashbyhq.com/api/non-user-graphql?op=ApiJobBoardWithTeams"
+
+        payload = {
+            "operationName": "ApiJobBoardWithTeams",
+            "variables": {
+                "organizationHostedJobsPageName": slug
+            },
+            "query": """
+            query ApiJobBoardWithTeams($organizationHostedJobsPageName: String!) {
+              jobBoard: jobBoardWithTeams(
+                organizationHostedJobsPageName: $organizationHostedJobsPageName
+              ) {
+                teams {
+                  id
+                  name
+                  parentTeamId
+                }
+                jobs {
+                  id
+                  title
+                  locationName
+                  employmentType
+                  secondaryLocations {
+                    locationName
+                  }
+                  applyUrl
+                  descriptionHtml
+                  publishedAt
+                  isListed
+                }
+              }
+            }
+            """,
+        }
+
+        r = requests.post(
+            url,
+            json=payload,
+            headers={**self.headers, "content-type": "application/json"},
+            timeout=REQUEST_TIMEOUT,
+        )
+        r.raise_for_status()
+
+        data = r.json() or {}
+        board = ((data.get("data") or {}).get("jobBoard")) or {}
+        jobs = board.get("jobs") or []
+
+        result: list[dict] = []
+
+        for j in jobs:
+            if not j or not j.get("isListed", True):
+                continue
+
+            desc_html = j.get("descriptionHtml") or ""
+            try:
+                desc = BeautifulSoup(desc_html, "html.parser").get_text("\n", strip=True)
+            except Exception:
+                desc = desc_html
+
+            result.append(
+                {
+                    "id": j.get("id"),
+                    "title": j.get("title"),
+                    "description": desc,
+                    "location": j.get("locationName"),
+                    "locationName": j.get("locationName"),
+                    "employmentType": j.get("employmentType"),
+                    "publishedAt": j.get("publishedAt"),
+                    "jobUrl": j.get("applyUrl"),
+                    "raw_json": j,
+                }
+            )
+
+        return result
+
+    
+    def fetch(self, keyword: str, target: int) -> list[dict]:
+        companies_raw = get_active_companies("ashby")
+        res: list[dict] = []
+        kl = (keyword or "").strip().lower()
+
+        for company in companies_raw:
             if len(res) >= target:
                 break
+
+            # Поддерживаем и dict, и str
+            if isinstance(company, dict):
+                slug = (
+                    company.get("company_key")
+                    or company.get("slug")
+                    or company.get("company_slug")
+                    or company.get("name")
+                )
+                company_name = (
+                    company.get("company_name")
+                    or company.get("name")
+                    or slug
+                )
+            else:
+                slug = str(company).strip()
+                company_name = slug
+
+            if not slug:
+                logger.warning("[ashby] skip company with empty slug: %r", company)
+                continue
+
             try:
-                r = requests.get(f"https://api.ashbyhq.com/posting-api/job-board/{company}", params={"includeCompensation": "true"}, headers=self.headers, timeout=REQUEST_TIMEOUT)
-                if r.status_code == 404:
-                    mark_inactive("ashby", company, "404")
-                    continue
-                if r.status_code != 200:
-                    mark_inactive("ashby", company, f"HTTP {r.status_code}")
-                    continue
-                jobs = r.json().get("jobs", [])
-                reset_fail_count("ashby", company)
-                for j in jobs:
-                    title = j.get("title", "")
-                    if kl not in title.lower():
-                        continue
-                    if len(res) >= target:
-                        break
-                    comp = self._sd(j.get("compensation"))
-                    sr = self._sd(comp.get("range"))
-                    res.append(self._rec(
-                        source_job_id=str(j.get("id") or j.get("jobId") or ""),
-                        title=title, description=j.get("descriptionHtml"), company_name=company,
-                        location=j.get("location"), salary_from=sr.get("minimum"), salary_to=sr.get("maximum"), currency=comp.get("currency"),
-                        remote=j.get("isRemote", False), published_at=j.get("publishedAt"), url=j.get("jobUrl"), search_query=keyword, raw_json=j,
-                    ))
-                time.sleep(0.3)
-            except requests.exceptions.Timeout:
-                mark_inactive("ashby", company, "timeout")
+                jobs = self.fetch_company_jobs(slug)
             except Exception as e:
-                logger.warning("Ashby %s: %s", company, e)
-                mark_inactive("ashby", company, str(e)[:100])
+                logger.warning("[ashby] failed company=%s err=%s", slug, e)
+                continue
+
+            for j in jobs:
+                if len(res) >= target:
+                    break
+
+                title = (j.get("title") or "").strip()
+                desc = (j.get("description") or "").strip()
+                text = f"{title}\n{desc}".lower()
+
+                if kl and kl not in text:
+                    continue
+
+                location = j.get("location") or j.get("locationName")
+                remote = "remote" in text or "remote" in str(location or "").lower()
+
+                res.append(
+                    self._rec(
+                        source_job_id=str(j.get("id") or ""),
+                        title=title,
+                        description=desc,
+                        company_name=company_name,
+                        salary_from=None,
+                        salary_to=None,
+                        currency=None,
+                        location=location,
+                        country=None,
+                        remote=remote,
+                        remote_type="remote" if remote else "office",
+                        employment_type=j.get("employmentType"),
+                        published_at=j.get("publishedAt"),
+                        url=j.get("jobUrl"),
+                        search_query=keyword,
+                        years_min=None,
+                        years_max=None,
+                        raw_json=j.get("raw_json") or j,
+                    )
+                )
+
+            time.sleep(0.3)
+
         return res
 
 

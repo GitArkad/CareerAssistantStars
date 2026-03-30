@@ -1,23 +1,7 @@
-"""
-db_loader.py
-
-Загрузчик данных текущего jobs pipeline в PostgreSQL.
-
-Архитектура:
-- ingestion_manifest : реестр обработанных файлов (одна строка на один raw-файл)
-- job_registry       : текущее состояние / идентичность каждой вакансии
-- job_audit          : аудит изменений вакансий по каждому запуску
-- jobs_curated       : нормализованные вакансии для приложения, поиска и аналитики
-- etl_runs           : журнал запусков пайплайна
-
-Важно:
-- сырые payload вакансий хранятся в S3/MinIO, а не в PostgreSQL
-- run_db_load() использует ОДНО соединение с БД на весь цикл загрузки
-"""
-
 from __future__ import annotations
 
 import json
+import logging
 import os
 from dataclasses import dataclass
 from datetime import date, datetime
@@ -26,11 +10,9 @@ from typing import Any, Optional, Sequence
 import psycopg2
 from psycopg2.extras import Json, execute_values
 
-# -------------------------------------------------------------------
-# Dataclass-структуры для аккуратного возврата итогов загрузки.
-# Нужны, чтобы стандартизировать ответ по manifest / curated / audit.
-# -------------------------------------------------------------------
+logger = logging.getLogger(__name__)
 
+# Структуры результата загрузки.
 @dataclass
 class ManifestLoadResult:
     total_received: int
@@ -53,12 +35,7 @@ class AuditLoadResult:
     inserted: int
     failed: int
 
-# -------------------------------------------------------------------
-# Явный список колонок для ingestion_manifest.
-# Используется для построения INSERT ... VALUES через execute_values.
-# Такой подход уменьшает риск рассинхронизации порядка полей.
-# ------------------------------------------------------------------
-
+# Колонки ingestion_manifest для batch insert
 MANIFEST_COLUMNS: list[str] = [
     "run_id",
     "source",
@@ -77,11 +54,7 @@ MANIFEST_COLUMNS: list[str] = [
     "metadata",
 ]
 
-# -------------------------------------------------------------------
-# Явный список колонок для jobs_curated.
-# Порядок должен соответствовать порядку значений в rows при upsert.
-# -------------------------------------------------------------------
-
+# Колонки jobs_curated для upsert
 CURATED_COLUMNS: list[str] = [
     "job_id",
     "run_id",
@@ -101,6 +74,8 @@ CURATED_COLUMNS: list[str] = [
     "salary_to",
     "currency",
     "salary_period",
+    "salary_from_rub",
+    "salary_to_rub",
     "experience_level",
     "seniority_normalized",
     "years_experience_min",
@@ -123,6 +98,11 @@ CURATED_COLUMNS: list[str] = [
     "spoken_languages",
     "equity_bonus",
     "security_clearance",
+    "specialty",
+    "specialty_category",
+    "salary_text",
+    "experience_text",
+    "posting_language",
     "role_family",
     "location",
     "country",
@@ -142,21 +122,8 @@ CURATED_COLUMNS: list[str] = [
     "embedding_status",
 ]
 
-
+# Подключение к PostgreSQL из env
 def get_connection():
-    """
-    Создаёт соединение с PostgreSQL из переменных окружения.
-
-    Обязательные env-переменные:
-    - POSTGRES_USER
-    - POSTGRES_PASSWORD
-    - POSTGRES_HOST
-    - POSTGRES_PORT
-    - POSTGRES_DB
-
-    Если чего-то не хватает, выбрасываем ValueError сразу,
-    чтобы ошибка была явной и не маскировалась под generic DB error.
-    """
     user = os.getenv("POSTGRES_USER")
     password = os.getenv("POSTGRES_PASSWORD")
     host = os.getenv("POSTGRES_HOST", "localhost")
@@ -187,7 +154,97 @@ def get_connection():
         dbname=db,
     )
 
+# Разбивка последовательности на чанки
+def _chunked(seq: Sequence[Any], size: int):
+    for i in range(0, len(seq), size):
+        yield seq[i:i + size]
 
+# Дедупликация вакансий перед загрузкой
+def _dedupe_normalized_curated_records(records: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
+    seen_job_ids: set[str] = set()
+    seen_source_job_ids: set[tuple[str, str]] = set()
+    seen_source_urls: set[tuple[str, str]] = set()
+    deduped_reversed: list[dict[str, Any]] = []
+
+    for record in reversed(list(records)):
+        job_id = record.get("job_id")
+        source = record.get("source")
+        source_job_id = record.get("source_job_id")
+        url = record.get("url")
+
+        source_job_key = (source, source_job_id) if source and source_job_id else None
+        source_url_key = (source, url) if source and url else None
+
+        if job_id and job_id in seen_job_ids:
+            continue
+        if source_job_key and source_job_key in seen_source_job_ids:
+            continue
+        if source_url_key and source_url_key in seen_source_urls:
+            continue
+
+        if job_id:
+            seen_job_ids.add(job_id)
+        if source_job_key:
+            seen_source_job_ids.add(source_job_key)
+        if source_url_key:
+            seen_source_urls.add(source_url_key)
+
+        deduped_reversed.append(record)
+
+    return list(reversed(deduped_reversed))
+
+# Частичное обновление статуса etl_run
+def update_etl_run_progress(
+    conn,
+    run_id: int,
+    *,
+    status: Optional[str] = None,
+    jobs_extracted: Optional[int] = None,
+    jobs_new_raw: Optional[int] = None,
+    jobs_processed_raw: Optional[int] = None,
+    jobs_curated_inserted: Optional[int] = None,
+    jobs_curated_updated: Optional[int] = None,
+    jobs_duplicates: Optional[int] = None,
+    embeddings_created: Optional[int] = None,
+    aggregates_updated: Optional[bool] = None,
+    error_message: Optional[str] = None,
+    finalize: bool = False,
+) -> None:
+    assignments: list[str] = []
+    params: list[Any] = []
+
+    mapping = [
+        ("status", status),
+        ("jobs_extracted", jobs_extracted),
+        ("jobs_new_raw", jobs_new_raw),
+        ("jobs_processed_raw", jobs_processed_raw),
+        ("jobs_curated_inserted", jobs_curated_inserted),
+        ("jobs_curated_updated", jobs_curated_updated),
+        ("jobs_duplicates", jobs_duplicates),
+        ("embeddings_created", embeddings_created),
+        ("aggregates_updated", aggregates_updated),
+        ("error_message", error_message),
+    ]
+
+    for column, value in mapping:
+        if value is not None:
+            assignments.append(f"{column} = %s")
+            params.append(value)
+
+    if finalize:
+        assignments.append("finished_at = NOW()")
+        assignments.append("duration_sec = EXTRACT(EPOCH FROM (NOW() - started_at))::INT")
+
+    if not assignments:
+        return
+
+    sql = f"UPDATE etl_runs SET {', '.join(assignments)} WHERE id = %s;"
+    params.append(run_id)
+
+    with conn.cursor() as cur:
+        cur.execute(sql, params)
+
+# Создание записи о старте ETL-run
 def start_etl_run(
     conn,
     pipeline_name: str = "jobs_pipeline",
@@ -195,11 +252,6 @@ def start_etl_run(
     source: Optional[str] = None,
     run_date: Optional[date] = None,
 ) -> int:
-    """
-    Создаёт запись о старте ETL-запуска в etl_runs.
-
-    Возвращает id созданного запуска.
-    """
     sql = """
         INSERT INTO etl_runs (
             pipeline_name,
@@ -216,7 +268,7 @@ def start_etl_run(
         cur.execute(sql, (pipeline_name, dag_id, run_date or date.today(), source))
         return cur.fetchone()[0]
 
-
+# Завершение ETL-run с итоговыми метриками
 def finish_etl_run(
     conn,
     run_id: int,
@@ -232,13 +284,6 @@ def finish_etl_run(
     aggregates_updated: bool = False,
     error_message: Optional[str] = None,
 ) -> None:
-    """
-    Завершает ETL-run и записывает его итоговые метрики.
-
-    status должен быть:
-    - success
-    - failed
-    """
     if status not in {"success", "failed"}:
         raise ValueError("status must be 'success' or 'failed'")
 
@@ -277,19 +322,8 @@ def finish_etl_run(
             ),
         )
 
-
+# Приведение значений к нужным типам
 def _to_datetime(value: Any) -> Optional[datetime]:
-    """
-    Приводит значение к datetime, если это возможно.
-
-    Поддерживает:
-    - datetime
-    - date
-    - ISO-строки
-    - строки с Z -> заменяются на +00:00
-
-    Если значение пустое или не парсится — возвращает None.
-    """
     if value in (None, "", "None"):
         return None
     if isinstance(value, datetime):
@@ -307,19 +341,8 @@ def _to_datetime(value: Any) -> Optional[datetime]:
             return None
     return None
 
-
+#  Приводит значение к int
 def _to_int(value: Any) -> Optional[int]:
-    """
-    Приводит значение к int.
-
-    Поддерживает:
-    - int
-    - float
-    - числовые строки
-
-    Для bool вернёт 0/1.
-    Для пустых / некорректных значений вернёт None.
-    """
     if value in (None, "", "None"):
         return None
     if isinstance(value, bool):
@@ -329,20 +352,33 @@ def _to_int(value: Any) -> Optional[int]:
     except (TypeError, ValueError):
         return None
 
+PG_BIGINT_MAX = 9_223_372_036_854_775_807
+PG_BIGINT_MIN = -9_223_372_036_854_775_808
 
+def _to_bigint(value: Any) -> Optional[int]:
+    if value in (None, "", "None"):
+        return None
+    if isinstance(value, bool):
+        return int(value)
+    try:
+        v = int(float(value))
+    except (TypeError, ValueError):
+        return None
+    if v < PG_BIGINT_MIN or v > PG_BIGINT_MAX:
+        return None
+    return v
+
+
+def _to_float(value: Any) -> Optional[float]:
+    if value in (None, "", "None"):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+#  Приводит значение к bool
 def _to_bool(value: Any, default: bool = False) -> bool:
-    """
-    Приводит значение к bool.
-
-    Поддерживаются:
-    - bool
-    - int / float
-    - строки yes/no, true/false, 1/0
-    - remote/hybrid -> True
-    - onsite/on-site -> False
-
-    Если распознать не удалось — возвращаем default.
-    """
     if value is None:
         return default
     if isinstance(value, bool):
@@ -353,16 +389,12 @@ def _to_bool(value: Any, default: bool = False) -> bool:
         normalized = value.strip().lower()
         if normalized in {"true", "1", "yes", "y", "remote", "hybrid"}:
             return True
-        if normalized in {"false", "0", "no", "n", "onsite", "on-site"}:
+        if normalized in {"false", "0", "no", "n", "onsite", "on-site", "office"}:
             return False
     return default
 
 
 def _to_text(value: Any) -> Optional[str]:
-    """
-    Приводит значение к обрезанной строке.
-    Пустые строки превращает в None.
-    """
     if value is None:
         return None
     text = str(value).strip()
@@ -397,18 +429,15 @@ def _to_text_list(value: Any) -> list[str]:
         return [str(item).strip() for item in value if str(item).strip()]
     return [str(value).strip()] if str(value).strip() else []
 
-
+# Возврат первого непустого значения по списку ключей
 def _first_non_null(record: dict[str, Any], *keys: str) -> Any:
-    """
-    Возвращает первое непустое значение из record по списку ключей.
-    """
     for key in keys:
         value = record.get(key)
         if value not in (None, "", "None"):
             return value
     return None
 
-
+# Нормализация записи ingestion_manifest
 def _normalize_manifest_record(record: dict[str, Any]) -> dict[str, Any]:
     run_id = _to_text(record.get("run_id"))
     source = _to_text(record.get("source"))
@@ -445,24 +474,8 @@ def _normalize_manifest_record(record: dict[str, Any]) -> dict[str, Any]:
         "metadata": metadata,
     }
 
-
+# Нормализация записи jobs_curated
 def _normalize_curated_record(record: dict[str, Any]) -> dict[str, Any]:
-    """
-    Нормализует одну вакансию для jobs_curated.
-
-    Обязательные поля:
-    - job_id
-    - source
-
-    Особенности:
-    - salary_from может прийти как salary_from или salary_min
-    - salary_to   может прийти как salary_to   или salary_max
-    - company_name может прийти как company_name или company
-    - remote может быть вычислен из remote_type, если remote явно не передан
-    - seniority_normalized по умолчанию 'unknown'
-    - role_family по умолчанию 'other'
-    - embedding_status по умолчанию 'pending'
-    """
     job_id = _to_text(record.get("job_id"))
     source = _to_text(record.get("source"))
 
@@ -478,7 +491,7 @@ def _normalize_curated_record(record: dict[str, Any]) -> dict[str, Any]:
     else:
         remote = _to_bool(remote_value, default=False)
 
-    return {
+    normalized = {
         "job_id": job_id,
         "run_id": _to_text(record.get("run_id")),
         "raw_s3_key": _to_text(record.get("raw_s3_key")),
@@ -493,14 +506,16 @@ def _normalize_curated_record(record: dict[str, Any]) -> dict[str, Any]:
         "requirements": _to_text(record.get("requirements")),
         "responsibilities": _to_text(record.get("responsibilities")),
         "nice_to_have": _to_text(record.get("nice_to_have")),
-        "salary_from": _to_int(_first_non_null(record, "salary_from", "salary_min")),
-        "salary_to": _to_int(_first_non_null(record, "salary_to", "salary_max")),
+        "salary_from": _to_bigint(_first_non_null(record, "salary_from", "salary_min")),
+        "salary_to": _to_bigint(_first_non_null(record, "salary_to", "salary_max")),
         "currency": _to_text(record.get("currency")),
         "salary_period": _to_text(record.get("salary_period")),
+        "salary_from_rub": _to_bigint(record.get("salary_from_rub")),
+        "salary_to_rub": _to_bigint(record.get("salary_to_rub")),
         "experience_level": _to_text(record.get("experience_level")),
         "seniority_normalized": _to_text(record.get("seniority_normalized")) or "unknown",
-        "years_experience_min": _to_int(record.get("years_experience_min")),
-        "years_experience_max": _to_int(record.get("years_experience_max")),
+        "years_experience_min": _to_float(record.get("years_experience_min")),
+        "years_experience_max": _to_float(record.get("years_experience_max")),
         "company_name": _to_text(_first_non_null(record, "company_name", "company")),
         "industry": _to_text(record.get("industry")),
         "company_size": _to_text(record.get("company_size")),
@@ -519,6 +534,11 @@ def _normalize_curated_record(record: dict[str, Any]) -> dict[str, Any]:
         "spoken_languages": _to_text_list(record.get("spoken_languages")),
         "equity_bonus": _to_text(record.get("equity_bonus")),
         "security_clearance": _to_text(record.get("security_clearance")),
+        "specialty": _to_text(record.get("specialty")),
+        "specialty_category": _to_text(record.get("specialty_category")),
+        "salary_text": _to_text(record.get("salary_text")),
+        "experience_text": _to_text(record.get("experience_text")),
+        "posting_language": _to_text(record.get("posting_language")),
         "role_family": _to_text(record.get("role_family")) or "other",
         "location": _to_text(record.get("location")),
         "country": _to_text(record.get("country")),
@@ -538,7 +558,29 @@ def _normalize_curated_record(record: dict[str, Any]) -> dict[str, Any]:
         "embedding_status": _to_text(record.get("embedding_status")) or "pending",
     }
 
+    if (
+        normalized["salary_from"] is not None
+        and normalized["salary_to"] is not None
+        and normalized["salary_from"] > normalized["salary_to"]
+    ):
+        normalized["salary_from"], normalized["salary_to"] = normalized["salary_to"], normalized["salary_from"]
 
+    if (
+        normalized["years_experience_min"] is not None
+        and normalized["years_experience_max"] is not None
+        and normalized["years_experience_min"] > normalized["years_experience_max"]
+    ):
+        normalized["years_experience_min"], normalized["years_experience_max"] = (
+            normalized["years_experience_max"],
+            normalized["years_experience_min"],
+        )
+
+    if normalized["embedding_status"] not in {"pending", "created", "failed", "skipped"}:
+        normalized["embedding_status"] = "pending"
+
+    return normalized
+
+# Получение существующих raw_s3_key из ingestion_manifest
 def _get_existing_manifest_raw_keys(conn, raw_s3_keys: Sequence[str]) -> set[str]:
     if not raw_s3_keys:
         return set()
@@ -547,7 +589,7 @@ def _get_existing_manifest_raw_keys(conn, raw_s3_keys: Sequence[str]) -> set[str
         cur.execute(sql, (list(raw_s3_keys),))
         return {row[0] for row in cur.fetchall()}
 
-
+# Получение текущего состояния jobs_curated
 def _get_existing_curated_state(conn, job_ids: Sequence[str]) -> dict[str, Optional[str]]:
     if not job_ids:
         return {}
@@ -556,13 +598,9 @@ def _get_existing_curated_state(conn, job_ids: Sequence[str]) -> dict[str, Optio
         cur.execute(sql, (list(job_ids),))
         return {row[0]: row[1] for row in cur.fetchall()}
 
-
+# Получение текущего состояния jobs_curated
 def upsert_manifest_records(conn, manifest_records: Sequence[dict[str, Any]]) -> ManifestLoadResult:
-    """
-    Возвращает множество raw_s3_key, которые уже есть в ingestion_manifest.
 
-    Нужна для подсчёта inserted vs updated после upsert.
-    """
     normalized: list[dict[str, Any]] = []
     failed = 0
 
@@ -623,15 +661,15 @@ def upsert_manifest_records(conn, manifest_records: Sequence[dict[str, Any]]) ->
         total_received=len(manifest_records), inserted=inserted, updated=updated, failed=failed
     )
 
-
+# Получение текущего состояния jobs_curated
 def upsert_job_registry(conn, curated_records: Sequence[dict[str, Any]]) -> None:
     if not curated_records:
         return
 
-    rows = []
+    prepared: list[tuple[Any, ...]] = []
     for record in curated_records:
         seen_at = record.get("parsed_at") or datetime.utcnow()
-        rows.append(
+        prepared.append(
             (
                 record["job_id"],
                 record["source"],
@@ -679,9 +717,25 @@ def upsert_job_registry(conn, curated_records: Sequence[dict[str, Any]]) -> None
     """
 
     with conn.cursor() as cur:
-        execute_values(cur, sql, rows)
+        for chunk in _chunked(prepared, 500):
+            cur.execute("SAVEPOINT job_registry_batch")
+            try:
+                execute_values(cur, sql, chunk)
+                cur.execute("RELEASE SAVEPOINT job_registry_batch")
+            except Exception as batch_exc:
+                logger.warning("job_registry batch failed, switching to row mode: %s", batch_exc)
+                cur.execute("ROLLBACK TO SAVEPOINT job_registry_batch")
+                for row in chunk:
+                    cur.execute("SAVEPOINT job_registry_row")
+                    try:
+                        execute_values(cur, sql, [row])
+                        cur.execute("RELEASE SAVEPOINT job_registry_row")
+                    except Exception as row_exc:
+                        logger.warning("Skipping job_registry row due to DB constraint error: %s", row_exc)
+                        cur.execute("ROLLBACK TO SAVEPOINT job_registry_row")
+                cur.execute("RELEASE SAVEPOINT job_registry_batch")
 
-
+# Upsert нормализованных вакансий в jobs_curated
 def upsert_curated_jobs(conn, curated_records: Sequence[dict[str, Any]]) -> CuratedLoadResult:
     normalized: list[dict[str, Any]] = []
     failed = 0
@@ -699,7 +753,6 @@ def upsert_curated_jobs(conn, curated_records: Sequence[dict[str, Any]]) -> Cura
 
     existing_state = _get_existing_curated_state(conn, [record["job_id"] for record in normalized])
 
-    rows = [tuple(record[column] for column in CURATED_COLUMNS) for record in normalized]
     update_assignments = [
         f"{column} = EXCLUDED.{column}"
         for column in CURATED_COLUMNS
@@ -714,32 +767,45 @@ def upsert_curated_jobs(conn, curated_records: Sequence[dict[str, Any]]) -> Cura
             {', '.join(update_assignments)};
     """
 
-    with conn.cursor() as cur:
-        execute_values(cur, sql, rows)
+    accepted_records: list[dict[str, Any]] = []
 
-    inserted = sum(1 for record in normalized if record["job_id"] not in existing_state)
-    updated = len(normalized) - inserted
+    with conn.cursor() as cur:
+        for chunk in _chunked(normalized, 500):
+            chunk_rows = [tuple(record.get(column) for column in CURATED_COLUMNS) for record in chunk]
+            cur.execute("SAVEPOINT jobs_curated_batch")
+            try:
+                execute_values(cur, sql, chunk_rows)
+                accepted_records.extend(chunk)
+                cur.execute("RELEASE SAVEPOINT jobs_curated_batch")
+            except Exception as batch_exc:
+                logger.warning("jobs_curated batch failed, switching to row mode: %s", batch_exc)
+                cur.execute("ROLLBACK TO SAVEPOINT jobs_curated_batch")
+                for record in chunk:
+                    row = tuple(record.get(column) for column in CURATED_COLUMNS)
+                    cur.execute("SAVEPOINT jobs_curated_row")
+                    try:
+                        execute_values(cur, sql, [row])
+                        accepted_records.append(record)
+                        cur.execute("RELEASE SAVEPOINT jobs_curated_row")
+                    except Exception as row_exc:
+                        failed += 1
+                        logger.warning("Skipping jobs_curated row due to DB constraint error: %s", row_exc)
+                        cur.execute("ROLLBACK TO SAVEPOINT jobs_curated_row")
+                cur.execute("RELEASE SAVEPOINT jobs_curated_batch")
+
+    inserted = sum(1 for record in accepted_records if record["job_id"] not in existing_state)
+    updated = len(accepted_records) - inserted
     return CuratedLoadResult(
         total_received=len(curated_records), inserted=inserted, updated=updated, failed=failed
     )
 
-
+# Запись аудита изменений вакансий
 def insert_job_audit_rows(
     conn,
     curated_records: Sequence[dict[str, Any]],
     existing_curated_state: dict[str, Optional[str]],
 ) -> AuditLoadResult:
-    """
-    Пишет аудит по вакансиям в job_audit.
 
-    Для каждой записи определяется action:
-    - inserted  : вакансии раньше не было
-    - unchanged : content_hash не изменился
-    - updated   : вакансия была, но content_hash изменился
-
-    ON CONFLICT (run_id, job_id) нужен на случай повторного запуска
-    или переигрывания того же run_id.
-    """
     if not curated_records:
         return AuditLoadResult(total_received=0, inserted=0, failed=0)
 
@@ -823,7 +889,7 @@ def insert_job_audit_rows(
 
     return AuditLoadResult(total_received=len(curated_records), inserted=len(rows), failed=failed)
 
-
+# Основной orchestrator загрузки в БД.
 def run_db_load(
     *,
     manifest_records: Sequence[dict[str, Any]],
@@ -833,27 +899,7 @@ def run_db_load(
     source: Optional[str] = None,
     manage_etl_run: bool = True,
 ) -> dict[str, Any]:
-    """
-    Orchestrator-функция файла.
 
-    Полный порядок работы:
-    1. Открыть одно соединение с PostgreSQL.
-    2. При необходимости создать etl_run.
-    3. Загрузить ingestion_manifest.
-    4. Нормализовать curated_records.
-    5. Получить текущее состояние jobs_curated по job_id.
-    6. Обновить job_registry.
-    7. Обновить jobs_curated.
-    8. Записать аудит в job_audit.
-    9. Посчитать unchanged / duplicates.
-    10. Завершить etl_run как success.
-    11. Сделать commit.
-
-    Если возникает любая ошибка:
-    - текущая транзакция откатывается
-    - etl_run помечается как failed через отдельное соединение
-    - ошибка пробрасывается выше
-    """
     with get_connection() as conn:
         conn.autocommit = False
         etl_run_id: Optional[int] = None
@@ -867,12 +913,12 @@ def run_db_load(
                     source=source,
                 )
 
-            # Сначала фиксируем, какие raw/clean файлы участвуют в загрузке.
+            # Сначала фиксируем файлы загрузки
             manifest_result = upsert_manifest_records(conn, manifest_records)
 
-            # Нормализуем curated-записи заранее, чтобы далее работать уже
-            # с единообразным форматом данных.
+            # Обновляем реестр, витрину и аудит
             normalized_curated = [_normalize_curated_record(record) for record in curated_records]
+            normalized_curated = _dedupe_normalized_curated_records(normalized_curated)
             existing_curated_state = _get_existing_curated_state(
                 conn,
                 [record["job_id"] for record in normalized_curated],

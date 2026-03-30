@@ -1,15 +1,6 @@
--- ###########################################################
--- migrate_salary_aggregates_currency.sql
---
--- Добавляет валюту в salary_aggregates и меняет уникальность
--- так, чтобы агрегаты можно было хранить отдельно по USD/EUR/RUB.
--- Идемпотентный скрипт: повторный запуск допустим.
--- ###########################################################
-
 BEGIN;
 
--- Добавляем currency, если колонки ещё нет.
--- DEFAULT 'USD' нужен для уже существующих строк.
+-- Добавляем currency в salary_aggregates
 DO $$
 BEGIN
     IF NOT EXISTS (
@@ -20,12 +11,11 @@ BEGIN
     END IF;
 END $$;
 
--- Удаляем старую уникальность без currency.
+-- Удаляем старую уникальность без currency
 ALTER TABLE salary_aggregates
     DROP CONSTRAINT IF EXISTS salary_aggregates_role_country_seniority_is_remote_key;
 
--- Новая уникальность: отдельная запись на ту же комбинацию,
--- но уже с учётом конкретной валюты.
+-- Новая уникальность с учётом currency
 DO $$
 BEGIN
     IF NOT EXISTS (
@@ -38,7 +28,7 @@ BEGIN
     END IF;
 END $$;
 
--- Индекс для фильтрации и выборок по валюте.
+-- Индекс по валюте
 CREATE INDEX IF NOT EXISTS idx_salary_aggregates_currency
     ON salary_aggregates (currency);
 

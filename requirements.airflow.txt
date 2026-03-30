@@ -8,7 +8,8 @@ boto3==1.34.69
 psycopg2-binary==2.9.9
 
 # --- Vector search / embeddings ---
-qdrant-client[fastembed]==1.9.1
+qdrant-client==1.9.1
+fastembed-gpu
 
 # --- Optional parsing / documents ---
 beautifulsoup4==4.12.3

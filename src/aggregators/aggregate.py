@@ -1,10 +1,5 @@
-"""
-aggregate.py
-
-AIRFLOW TASK 4: пересчёт агрегатов рынка после загрузки вакансий в PostgreSQL.
-"""
-
 from __future__ import annotations
+from typing import Optional
 
 import logging
 
@@ -13,13 +8,21 @@ logger = logging.getLogger(__name__)
 COUNTRY_SENTINEL = "__ALL__"
 SENIORITY_SENTINEL = "unknown"
 
+# Полный пересчёт рыночных агрегатов после загрузки вакансий
+def run_aggregate_step(etl_run_id: Optional[int] = None) -> dict:
+    """
+    Полностью пересчитывает:
+    - market_skill_stats
+    - salary_aggregates
+    - market_role_stats
 
-def run_aggregate_step() -> dict:
+    Источник: jobs_curated
+
+    ВАЖНО:
+    Конвертация зарплат идёт по курсу на дату вакансии:
+    published_at -> parsed_at -> CURRENT_DATE
     """
-    Обновляет market_skill_stats, salary_aggregates, market_role_stats
-    на основе jobs_curated.
-    """
-    from src.loaders.db_loader import get_connection
+    from src.loaders.db_loader import get_connection, update_etl_run_progress
 
     summary = {
         "skill_stats_updated": 0,
@@ -28,35 +31,65 @@ def run_aggregate_step() -> dict:
         "status": "success",
     }
 
+    conn = None
+    cur = None
+
     try:
         conn = get_connection()
         cur = conn.cursor()
 
-        ###########################################################
-        # Агрегаты по навыкам
-        ###########################################################
-        # Для каждой группы role/country/seniority:
-        # - считаем долю вакансий с конкретным skill;
-        # - считаем среднюю зарплату по skill в USD
+        # Полная очистка агрегатов перед пересборкой
+        cur.execute(
+            """
+            TRUNCATE TABLE
+                market_skill_stats,
+                salary_aggregates,
+                market_role_stats;
+            """
+        )
+        logger.info("Aggregate tables truncated before rebuild")
+
+        # Пересчёт агрегатов по навыкам
         cur.execute(
             """
             WITH job_skill_rows AS (
                 SELECT DISTINCT
                     jc.job_id,
                     jc.title_normalized AS role,
-                    COALESCE(NULLIF(BTRIM(jc.country), ''), %s) AS country,
+                    COALESCE(NULLIF(BTRIM(COALESCE(jc.country_normalized, jc.country)), ''), %s) AS country,
                     COALESCE(NULLIF(BTRIM(jc.seniority_normalized), ''), %s) AS seniority,
                     skill,
                     CASE
                         WHEN jc.salary_from IS NOT NULL AND jc.salary_to IS NOT NULL
                             THEN (
-                                convert_salary(jc.salary_from::numeric, jc.currency, 'USD')
-                                + convert_salary(jc.salary_to::numeric, jc.currency, 'USD')
+                                convert_salary(
+                                    jc.salary_from::numeric,
+                                    jc.currency,
+                                    'USD',
+                                    COALESCE(jc.published_at::date, jc.parsed_at::date, CURRENT_DATE)
+                                )
+                                +
+                                convert_salary(
+                                    jc.salary_to::numeric,
+                                    jc.currency,
+                                    'USD',
+                                    COALESCE(jc.published_at::date, jc.parsed_at::date, CURRENT_DATE)
+                                )
                             ) / 2.0
                         WHEN jc.salary_from IS NOT NULL
-                            THEN convert_salary(jc.salary_from::numeric, jc.currency, 'USD')
+                            THEN convert_salary(
+                                jc.salary_from::numeric,
+                                jc.currency,
+                                'USD',
+                                COALESCE(jc.published_at::date, jc.parsed_at::date, CURRENT_DATE)
+                            )
                         WHEN jc.salary_to IS NOT NULL
-                            THEN convert_salary(jc.salary_to::numeric, jc.currency, 'USD')
+                            THEN convert_salary(
+                                jc.salary_to::numeric,
+                                jc.currency,
+                                'USD',
+                                COALESCE(jc.published_at::date, jc.parsed_at::date, CURRENT_DATE)
+                            )
                     END AS salary_mid_usd
                 FROM jobs_curated jc
                 CROSS JOIN LATERAL unnest(COALESCE(jc.skills_normalized, '{}'::text[])) AS skill
@@ -67,14 +100,14 @@ def run_aggregate_step() -> dict:
             group_totals AS (
                 SELECT
                     title_normalized AS role,
-                    COALESCE(NULLIF(BTRIM(country), ''), %s) AS country,
+                    COALESCE(NULLIF(BTRIM(COALESCE(country_normalized, country)), ''), %s) AS country,
                     COALESCE(NULLIF(BTRIM(seniority_normalized), ''), %s) AS seniority,
                     COUNT(DISTINCT job_id) AS total_jobs
                 FROM jobs_curated
                 WHERE title_normalized IS NOT NULL
                 GROUP BY
                     title_normalized,
-                    COALESCE(NULLIF(BTRIM(country), ''), %s),
+                    COALESCE(NULLIF(BTRIM(COALESCE(country_normalized, country)), ''), %s),
                     COALESCE(NULLIF(BTRIM(seniority_normalized), ''), %s)
             )
             INSERT INTO market_skill_stats (
@@ -114,12 +147,10 @@ def run_aggregate_step() -> dict:
         summary["skill_stats_updated"] = cur.rowcount
         logger.info("Skill stats: %s rows upserted", cur.rowcount)
 
-        ###########################################################
-        # Агрегаты зарплат
-        ###########################################################
-        # Считаем percentiles и средние отдельно по USD / EUR / RUB.
-        # Внутри одной агрегации валюты не смешиваются.
+        
+        # Пересчёт зарплатных агрегатов по валютам
         total_salary_rows = 0
+
         for target_cur in ("USD", "EUR", "RUB"):
             cur.execute(
                 """
@@ -131,7 +162,7 @@ def run_aggregate_step() -> dict:
                 )
                 SELECT
                     title_normalized AS role,
-                    COALESCE(NULLIF(BTRIM(country), ''), %s) AS country,
+                    COALESCE(NULLIF(BTRIM(COALESCE(country_normalized, country)), ''), %s) AS country,
                     COALESCE(NULLIF(BTRIM(seniority_normalized), ''), %s) AS seniority,
                     COALESCE(remote, false) AS is_remote,
                     PERCENTILE_CONT(0.10) WITHIN GROUP (ORDER BY mid)::int AS p10,
@@ -149,18 +180,40 @@ def run_aggregate_step() -> dict:
                     SELECT
                         title_normalized,
                         country,
+                        country_normalized,
                         seniority_normalized,
                         remote,
                         CASE
                             WHEN salary_from IS NOT NULL AND salary_to IS NOT NULL
                                 THEN (
-                                    convert_salary(salary_from::numeric, currency, %s)
-                                    + convert_salary(salary_to::numeric, currency, %s)
+                                    convert_salary(
+                                        salary_from::numeric,
+                                        currency,
+                                        %s,
+                                        COALESCE(published_at::date, parsed_at::date, CURRENT_DATE)
+                                    )
+                                    +
+                                    convert_salary(
+                                        salary_to::numeric,
+                                        currency,
+                                        %s,
+                                        COALESCE(published_at::date, parsed_at::date, CURRENT_DATE)
+                                    )
                                 ) / 2.0
                             WHEN salary_from IS NOT NULL
-                                THEN convert_salary(salary_from::numeric, currency, %s)
+                                THEN convert_salary(
+                                    salary_from::numeric,
+                                    currency,
+                                    %s,
+                                    COALESCE(published_at::date, parsed_at::date, CURRENT_DATE)
+                                )
                             WHEN salary_to IS NOT NULL
-                                THEN convert_salary(salary_to::numeric, currency, %s)
+                                THEN convert_salary(
+                                    salary_to::numeric,
+                                    currency,
+                                    %s,
+                                    COALESCE(published_at::date, parsed_at::date, CURRENT_DATE)
+                                )
                         END AS mid
                     FROM jobs_curated
                     WHERE (salary_from IS NOT NULL OR salary_to IS NOT NULL)
@@ -169,7 +222,7 @@ def run_aggregate_step() -> dict:
                 WHERE mid IS NOT NULL AND mid > 0
                 GROUP BY
                     title_normalized,
-                    COALESCE(NULLIF(BTRIM(country), ''), %s),
+                    COALESCE(NULLIF(BTRIM(COALESCE(country_normalized, country)), ''), %s),
                     COALESCE(NULLIF(BTRIM(seniority_normalized), ''), %s),
                     COALESCE(remote, false)
                 HAVING COUNT(*) >= 3
@@ -205,15 +258,8 @@ def run_aggregate_step() -> dict:
         summary["salary_aggregates_updated"] = total_salary_rows
         logger.info("Salary aggregates total: %s rows upserted", total_salary_rows)
 
-        ###########################################################
-        # Агрегаты по ролям
-        ###########################################################
-        # Для каждой группы role/country/seniority:
-        # - считаем total_jobs;
-        # - средний опыт;
-        # - долю remote;
-        # - среднюю зарплату в USD;
-        # - условный уровень competition.
+        
+        # Пересчёт агрегатов по ролям
         cur.execute(
             """
             INSERT INTO market_role_stats (
@@ -222,7 +268,7 @@ def run_aggregate_step() -> dict:
             )
             SELECT
                 title_normalized AS role,
-                COALESCE(NULLIF(BTRIM(country), ''), %s) AS country,
+                COALESCE(NULLIF(BTRIM(COALESCE(country_normalized, country)), ''), %s) AS country,
                 COALESCE(NULLIF(BTRIM(seniority_normalized), ''), %s) AS seniority,
                 COUNT(*) AS total_jobs,
                 ROUND(AVG(COALESCE(years_experience_min, 0)), 2) AS avg_experience,
@@ -234,13 +280,34 @@ def run_aggregate_step() -> dict:
                     CASE
                         WHEN salary_from IS NOT NULL AND salary_to IS NOT NULL
                             THEN (
-                                convert_salary(salary_from::numeric, currency, 'USD')
-                                + convert_salary(salary_to::numeric, currency, 'USD')
+                                convert_salary(
+                                    salary_from::numeric,
+                                    currency,
+                                    'USD',
+                                    COALESCE(published_at::date, parsed_at::date, CURRENT_DATE)
+                                )
+                                +
+                                convert_salary(
+                                    salary_to::numeric,
+                                    currency,
+                                    'USD',
+                                    COALESCE(published_at::date, parsed_at::date, CURRENT_DATE)
+                                )
                             ) / 2.0
                         WHEN salary_from IS NOT NULL
-                            THEN convert_salary(salary_from::numeric, currency, 'USD')
+                            THEN convert_salary(
+                                salary_from::numeric,
+                                currency,
+                                'USD',
+                                COALESCE(published_at::date, parsed_at::date, CURRENT_DATE)
+                            )
                         WHEN salary_to IS NOT NULL
-                            THEN convert_salary(salary_to::numeric, currency, 'USD')
+                            THEN convert_salary(
+                                salary_to::numeric,
+                                currency,
+                                'USD',
+                                COALESCE(published_at::date, parsed_at::date, CURRENT_DATE)
+                            )
                     END
                 ))::int AS avg_salary,
                 CASE
@@ -253,7 +320,7 @@ def run_aggregate_step() -> dict:
             WHERE title_normalized IS NOT NULL
             GROUP BY
                 title_normalized,
-                COALESCE(NULLIF(BTRIM(country), ''), %s),
+                COALESCE(NULLIF(BTRIM(COALESCE(country_normalized, country)), ''), %s),
                 COALESCE(NULLIF(BTRIM(seniority_normalized), ''), %s)
             ON CONFLICT (role, country, seniority)
             DO UPDATE SET
@@ -275,19 +342,62 @@ def run_aggregate_step() -> dict:
         logger.info("Role stats: %s rows upserted", cur.rowcount)
 
         conn.commit()
-        cur.close()
-        conn.close()
+
+        # Обновление статуса etl_run после успешного пересчёта
+        if etl_run_id is not None:
+            with get_connection() as meta_conn:
+                update_etl_run_progress(
+                    meta_conn,
+                    etl_run_id,
+                    aggregates_updated=True,
+                )
+                meta_conn.commit()
 
     except Exception as e:
         summary["status"] = "failed"
         summary["error"] = str(e)
         logger.error("Aggregate step failed: %s", e)
+
+        if conn is not None:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+
+        # Обновление статуса etl_run при ошибке
+        if etl_run_id is not None:
+            try:
+                with get_connection() as err_conn:
+                    update_etl_run_progress(
+                        err_conn,
+                        etl_run_id,
+                        status="failed",
+                        error_message=str(e),
+                        finalize=True,
+                    )
+                    err_conn.commit()
+            except Exception as log_exc:
+                logger.error("Failed to update etl_runs after aggregate error: %s", log_exc)
+
         raise
+
+    finally:
+        # Закрытие курсора и соединения
+        if cur is not None:
+            try:
+                cur.close()
+            except Exception:
+                pass
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
     logger.info("Aggregate step complete: %s", summary)
     return summary
 
-
+# Локальный запуск для ручной проверки
 if __name__ == "__main__":
     result = run_aggregate_step()
     print(result)

@@ -1,42 +1,19 @@
-"""
-job_parser_dag.py
-
-Primary Airflow DAG for the jobs pipeline.
-
-Single DAG, two parser modes:
-
-1. query-based sources
-   Examples: HH, Adzuna, USAJobs, Arbeitnow, Ashby
-   These parsers are expected to search/fetch using their own query-driven logic.
-
-2. catalog-based sources
-   Examples: Greenhouse, Lever, Himalayas
-   These parsers are expected to load a source catalog / board dataset once per run
-   and then filter internally, instead of re-crawling the source for every query.
-
-Pipeline:
-    [parse_* in parallel] -> collect_keys -> clean -> load -> aggregate -> embed
-
-Important:
-- collect_keys waits for ALL parse tasks to finish (success/failed/skipped)
-- pipeline continues as long as at least one parser produced data
-- parser-specific logic lives inside src.parsers.pars
-"""
-
 from __future__ import annotations
 
 import importlib
 import os
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from airflow import DAG
 from airflow.providers.standard.operators.python import PythonOperator
 
+# Добавляем путь к проекту
 PROJECT_PATH = os.getenv("PROJECT_PATH", "/opt/airflow/project")
 if PROJECT_PATH not in sys.path:
     sys.path.insert(0, PROJECT_PATH)
 
+# Общие параметры DAG
 DEFAULT_ARGS = {
     "owner": "airflow",
     "depends_on_past": False,
@@ -44,17 +21,12 @@ DEFAULT_ARGS = {
     "retry_delay": timedelta(minutes=5),
 }
 
-# ---------------------------------------------------------------------
-# Parser config
-# mode:
-#   - "query"   -> parser uses query-driven fetching internally
-#   - "catalog" -> parser loads source catalog once per run internally
-# ---------------------------------------------------------------------
+# Конфиг парсеров
 PARSERS = [
     {"task_id": "parse_hh",         "cls": "HHParser",         "mode": "query",   "timeout_h": 1.0},
     {"task_id": "parse_adzuna",     "cls": "AdzunaParser",     "mode": "query",   "timeout_h": 1.5},
-    {"task_id": "parse_usajobs",    "cls": "USAJobsParser",    "mode": "query",   "timeout_h": 0.5},
-    {"task_id": "parse_arbeitnow",  "cls": "ArbeitnowParser",  "mode": "query",   "timeout_h": 0.5},
+    {"task_id": "parse_usajobs",    "cls": "USAJobsParser",    "mode": "query",   "timeout_h": 1.5},
+    {"task_id": "parse_arbeitnow",  "cls": "ArbeitnowParser",  "mode": "catalog",   "timeout_h": 0.5},
     {"task_id": "parse_ashby",      "cls": "AshbyParser",      "mode": "query",   "timeout_h": 0.5},
 
     {"task_id": "parse_greenhouse", "cls": "GreenhouseParser", "mode": "catalog", "timeout_h": 1.0},
@@ -62,7 +34,7 @@ PARSERS = [
     {"task_id": "parse_himalayas",  "cls": "HimalayasParser",  "mode": "catalog", "timeout_h": 1.0},
 ]
 
-
+# Создаёт экземпляр парсера
 def _build_parser(cls_name: str):
     """Instantiate parser class with required credentials if needed."""
     pars_module = importlib.import_module("src.parsers.pars")
@@ -84,21 +56,30 @@ def _build_parser(cls_name: str):
 
     return cls()
 
+# Возвращает дату запуска в формате YYYY-MM-DD
+def _resolve_date_str(context) -> str:
+    logical_date = context.get("logical_date")
 
+    if logical_date is None:
+        dag_run = context.get("dag_run")
+        logical_date = getattr(dag_run, "logical_date", None)
+
+    if logical_date is None:
+        ti = context.get("ti")
+        logical_date = getattr(ti, "logical_date", None)
+
+    if logical_date is None:
+        return datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+    return logical_date.strftime("%Y-%m-%d")
+
+# Запускает один парсер и сохраняет raw CSV в S3
 def _run_single_parser(cls_name: str, mode: str, **context) -> None:
-    """
-    Run a single parser and upload raw CSV to S3.
-
-    mode is informational for DAG readability and future extension.
-    Actual parser behavior is implemented in src.parsers.pars:
-      - query parsers should run query-first logic internally
-      - catalog parsers should run catalog-first logic internally
-    """
     from src.loaders.s3_storage import ensure_bucket, raw_key, upload_df
 
     ti = context["ti"]
-    date_str = context["logical_date"].strftime("%Y-%m-%d")
-    run_id = context["run_id"]
+    date_str = _resolve_date_str(context)
+    run_id = context.get("run_id") or getattr(ti, "run_id", "manual")
 
     ensure_bucket()
 
@@ -107,9 +88,6 @@ def _run_single_parser(cls_name: str, mode: str, **context) -> None:
         ti.xcom_push(key="raw_s3_key", value=None)
         return
 
-    # The parser itself decides how to execute:
-    # - query-based parsers use query-driven run()
-    # - catalog-based parsers load and filter catalog internally
     parser.run()
     df = parser.to_df()
 
@@ -121,15 +99,10 @@ def _run_single_parser(cls_name: str, mode: str, **context) -> None:
     upload_df(df, key)
     ti.xcom_push(key="raw_s3_key", value=key)
 
-
+# Собирает ключи raw-файлов из всех parser tasks
 def task_collect_keys(**context) -> None:
-    """
-    Wait for all parser tasks to finish and gather available raw S3 keys.
-
-    Continues the pipeline if at least one parser produced data.
-    """
     ti = context["ti"]
-    date_str = context["logical_date"].strftime("%Y-%m-%d")
+    date_str = _resolve_date_str(context)
 
     raw_keys: list[str] = []
     for parser_cfg in PARSERS:
@@ -143,7 +116,7 @@ def task_collect_keys(**context) -> None:
     ti.xcom_push(key="date_str", value=date_str)
     ti.xcom_push(key="raw_s3_keys", value=raw_keys)
 
-
+# Запускает этап очистки данных
 def task_clean(**context) -> None:
     from src.cleaners.data_cleaner import run_clean_step
 
@@ -157,7 +130,7 @@ def task_clean(**context) -> None:
 
     ti.xcom_push(key="clean_s3_key", value=clean_s3_key)
 
-
+# Загружает очищенные данные в БД
 def task_load(**context) -> None:
     from src.loaders.load_to_db import run_load_step
 
@@ -173,28 +146,25 @@ def task_load(**context) -> None:
     )
     ti.xcom_push(key="load_summary", value=summary)
 
-
+# Пересчитывает агрегаты
 def task_aggregate(**context) -> None:
     from src.aggregators.aggregate import run_aggregate_step
 
     summary = run_aggregate_step()
     context["ti"].xcom_push(key="aggregate_summary", value=summary)
 
-
+# Отправляет pending вакансии в embeddings
 def task_embed(**context) -> None:
     from src.loaders.qdrant_service import run_embedding_step
-
-    date_str = context["ti"].xcom_pull(task_ids="collect_keys", key="date_str")
-    summary = run_embedding_step(date_str=date_str)
+    summary = run_embedding_step(date_str=None)
     context["ti"].xcom_push(key="embed_summary", value=summary)
-
 
 with DAG(
     dag_id="jobs_pipeline_weekly",
-    description="Weekly jobs pipeline: parallel parse -> collect -> clean -> load -> aggregate -> embed",
+    description="Jobs pipeline every 2 days: parallel parse -> collect -> clean -> load -> aggregate -> embed",
     default_args=DEFAULT_ARGS,
     start_date=datetime(2026, 3, 1),
-    schedule="@weekly",
+    schedule=timedelta(days=2),
     catchup=False,
     max_active_runs=1,
     tags=["jobs", "etl", "s3", "postgres", "qdrant"],
@@ -214,7 +184,7 @@ with DAG(
             retry_delay=timedelta(minutes=3),
         )
         parse_tasks.append(task)
-  
+
     collect = PythonOperator(
         task_id="collect_keys",
         python_callable=task_collect_keys,

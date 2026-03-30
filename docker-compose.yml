@@ -1,5 +1,5 @@
 # ============================================================
-# CareerAssistantStars — Full Stack Docker Compose
+# CareerAssistantStars - Full Stack Docker Compose
 # Airflow 3.x (CeleryExecutor) + PostgreSQL + Qdrant + FastAPI + Streamlit
 # All data persisted to named volumes
 # ============================================================
@@ -11,6 +11,7 @@ x-airflow-common: &airflow-common
   env_file:
     - .env
   environment: &airflow-common-env
+    PYTHONDONTWRITEBYTECODE: "1"
     AIRFLOW__CORE__EXECUTOR: CeleryExecutor
     AIRFLOW__CORE__AUTH_MANAGER: airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
     AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${AIRFLOW_POSTGRES_USER}:${AIRFLOW_POSTGRES_PASSWORD}@${AIRFLOW_POSTGRES_HOST}/${AIRFLOW_POSTGRES_DB}
@@ -21,6 +22,7 @@ x-airflow-common: &airflow-common
     AIRFLOW__CORE__LOAD_EXAMPLES: "false"
     AIRFLOW__CORE__EXECUTION_API_SERVER_URL: http://airflow-apiserver:8080/execution/
     AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW__API_AUTH__JWT_SECRET}
+    AIRFLOW__API__SECRET_KEY: ${AIRFLOW__API__SECRET_KEY}
     AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: "true"
     AIRFLOW_CONFIG: /opt/airflow/config/airflow.cfg
     EMAIL_YOUR: ${EMAIL_YOUR}
@@ -63,7 +65,7 @@ x-airflow-common: &airflow-common
     - ./airflow/output_global:/opt/airflow/output_global
     - ./src:/opt/airflow/project/src
     - ./backend:/opt/airflow/project/backend
-    - ./db:/opt/airflow/project/db 
+    - ./db:/opt/airflow/project/db
   user: "${AIRFLOW_UID}:0"
   depends_on: &airflow-common-depends-on
     redis:
@@ -72,10 +74,6 @@ x-airflow-common: &airflow-common
       condition: service_healthy
     minio:
       condition: service_healthy
-
-  # ──────────────────────────────────────────────
-  # PROJECT DATABASES
-  # ──────────────────────────────────────────────
 
 services:
   minio:
@@ -175,10 +173,6 @@ services:
     networks:
       - app-network
 
-    # ──────────────────────────────────────────────
-    # BACKEND (FastAPI)
-    # ──────────────────────────────────────────────
-
   backend:
     build:
       context: .
@@ -187,6 +181,7 @@ services:
     env_file:
       - .env
     environment:
+      PYTHONDONTWRITEBYTECODE: "1"
       POSTGRES_DB: ${POSTGRES_DB}
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
@@ -195,6 +190,8 @@ services:
 
       QDRANT_HOST: ${QDRANT_HOST}
       QDRANT_PORT: ${QDRANT_PORT}
+      QDRANT_CUDA: ${QDRANT_CUDA:-auto}
+      QDRANT_CUDA_DEVICE_IDS: ${QDRANT_CUDA_DEVICE_IDS:-0}
 
       REDIS_HOST: ${REDIS_HOST}
       REDIS_PORT: ${REDIS_PORT}
@@ -216,7 +213,6 @@ services:
     volumes:
       - ./backend:/app/backend
       - ./db:/app/db
-      - backend-cache:/app/cache
     depends_on:
       project-postgres:
         condition: service_healthy
@@ -231,11 +227,6 @@ services:
     restart: unless-stopped
     networks:
       - app-network
-
-
-    # ──────────────────────────────────────────────
-    # FRONTEND (Streamlit)
-    # ──────────────────────────────────────────────
 
   frontend:
     build:
@@ -257,10 +248,6 @@ services:
     networks:
       - app-network
 
-    # ──────────────────────────────────────────────
-    # AIRFLOW — PostgreSQL (separate from project DB)
-    # ──────────────────────────────────────────────
-
   airflow-postgres:
     image: postgres:16
     container_name: airflow-postgres
@@ -281,10 +268,6 @@ services:
     restart: unless-stopped
     networks:
       - app-network
-
-  # ──────────────────────────────────────────────
-  # AIRFLOW — Services
-  # ──────────────────────────────────────────────
 
   airflow-apiserver:
     <<: *airflow-common
@@ -349,6 +332,8 @@ services:
     environment:
       <<: *airflow-common-env
       DUMB_INIT_SETSID: "0"
+      QDRANT_CUDA: ${QDRANT_CUDA:-auto}
+      QDRANT_CUDA_DEVICE_IDS: ${QDRANT_CUDA_DEVICE_IDS:-0}
     healthcheck:
       test: ["CMD-SHELL", "celery --app airflow.providers.celery.executors.celery_executor.app inspect ping -d \"celery@$${HOSTNAME}\" || celery --app airflow.executors.celery_executor.app inspect ping -d \"celery@$${HOSTNAME}\""]
       interval: 30s
@@ -425,10 +410,6 @@ services:
       - airflow
     networks:
       - app-network
-
-# ──────────────────────────────────────────────
-# PERSISTENT VOLUMES — все данные сохраняются
-# ──────────────────────────────────────────────
 
 volumes:
   project-postgres-data:

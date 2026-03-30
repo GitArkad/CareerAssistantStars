@@ -13,6 +13,7 @@ import logging
 import os
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
+from threading import RLock
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +51,7 @@ _REGISTRY: Dict[str, List[str]] = {
 _S3_KEY = "config/ats_status.json"
 _LOCAL = "/tmp/ats_status.json"
 _cache: Optional[Dict[str, Dict[str, Dict[str, Any]]]] = None
+_cache_lock = RLock()
 _TEMP_REASONS = ("timeout", "timed out", "503", "502", "500", "429", "connection", "temporary")
 _PERM_REASONS = ("404", "410", "invalid board", "not found")
 
@@ -71,55 +73,89 @@ def _threshold_for_reason(reason: str) -> int:
     return 3
 
 
-def _load() -> Dict[str, Dict[str, Dict[str, Any]]]:
-    global _cache
-    if _cache is not None:
-        return _cache
-
+def _read_remote_or_local() -> Dict[str, Dict[str, Dict[str, Any]]]:
     try:
         from src.loaders.s3_storage import get_bucket, get_s3_client
 
         body = get_s3_client().get_object(Bucket=get_bucket(), Key=_S3_KEY)["Body"].read()
-        _cache = json.loads(body.decode("utf-8"))
-        return _cache
+        return json.loads(body.decode("utf-8"))
     except Exception:
         pass
 
     if os.path.exists(_LOCAL):
         try:
             with open(_LOCAL, "r", encoding="utf-8") as f:
-                _cache = json.load(f)
-                return _cache
+                return json.load(f)
         except Exception:
             pass
 
-    _cache = {}
-    return _cache
+    return {}
+
+
+def _merge_state(
+    base: Dict[str, Dict[str, Dict[str, Any]]],
+    incoming: Dict[str, Dict[str, Dict[str, Any]]],
+) -> Dict[str, Dict[str, Dict[str, Any]]]:
+    merged = json.loads(json.dumps(base or {}))
+
+    for platform, companies in (incoming or {}).items():
+        merged.setdefault(platform, {})
+        for company, payload in (companies or {}).items():
+            current = merged[platform].get(company, {})
+            if not current:
+                merged[platform][company] = payload
+                continue
+
+            current_fail = int(current.get("fail_count", 0) or 0)
+            incoming_fail = int(payload.get("fail_count", 0) or 0)
+            if incoming_fail >= current_fail:
+                chosen = dict(current)
+                chosen.update(payload)
+                merged[platform][company] = chosen
+            else:
+                chosen = dict(payload)
+                chosen.update(current)
+                merged[platform][company] = chosen
+
+    return merged
+
+
+def _load() -> Dict[str, Dict[str, Dict[str, Any]]]:
+    global _cache
+    with _cache_lock:
+        if _cache is not None:
+            return _cache
+        _cache = _read_remote_or_local()
+        return _cache
 
 
 def _save() -> None:
-    if _cache is None:
-        return
+    global _cache
+    with _cache_lock:
+        if _cache is None:
+            return
 
-    data = json.dumps(_cache, indent=2, ensure_ascii=False, default=str)
+        latest = _read_remote_or_local()
+        _cache = _merge_state(latest, _cache)
+        data = json.dumps(_cache, indent=2, ensure_ascii=False, default=str)
 
-    try:
-        with open(_LOCAL, "w", encoding="utf-8") as f:
-            f.write(data)
-    except Exception:
-        pass
+        try:
+            with open(_LOCAL, "w", encoding="utf-8") as f:
+                f.write(data)
+        except Exception:
+            pass
 
-    try:
-        from src.loaders.s3_storage import get_bucket, get_s3_client
+        try:
+            from src.loaders.s3_storage import get_bucket, get_s3_client
 
-        get_s3_client().put_object(
-            Bucket=get_bucket(),
-            Key=_S3_KEY,
-            Body=data.encode("utf-8"),
-            ContentType="application/json",
-        )
-    except Exception as e:
-        logger.warning("ATS status S3 save failed: %s", e)
+            get_s3_client().put_object(
+                Bucket=get_bucket(),
+                Key=_S3_KEY,
+                Body=data.encode("utf-8"),
+                ContentType="application/json",
+            )
+        except Exception as e:
+            logger.warning("ATS status S3 save failed: %s", e)
 
 
 def get_active_companies(platform: str) -> List[str]:

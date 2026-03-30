@@ -1,17 +1,3 @@
-"""
-exchange_rates.py
-
-Обновление официальных курсов валют для нормализации зарплат.
-Источники:
-- ECB
-- Банк России (CBR)
-
-Результат:
-- расчёт EUR-базовых курсов
-- построение cross-rates
-- upsert в exchange_rates
-"""
-
 from __future__ import annotations
 
 import csv
@@ -19,8 +5,8 @@ import io
 import logging
 import xml.etree.ElementTree as ET
 from datetime import date, datetime, timedelta
-from functools import lru_cache
 from typing import Optional
+import time
 
 import requests
 
@@ -53,6 +39,25 @@ ECB_DAILY_CURRENCIES = {
 
 LOOKBACK_DAYS = 10
 REQUEST_TIMEOUT = 20
+CACHE_TTL_SECONDS = int(__import__("os").getenv("FX_CACHE_TTL_SECONDS", "21600"))
+_ECB_CACHE: dict[tuple[str, str], tuple[float, list[dict[str, str]]]] = {}
+_CBR_CACHE: dict[str, tuple[float, tuple[str, dict[str, float]]]] = {}
+
+
+def _cache_get(cache: dict, key):
+    item = cache.get(key)
+    if not item:
+        return None
+    expires_at, value = item
+    if expires_at <= time.monotonic():
+        cache.pop(key, None)
+        return None
+    return value
+
+
+def _cache_set(cache: dict, key, value):
+    cache[key] = (time.monotonic() + CACHE_TTL_SECONDS, value)
+    return value
 
 
 ###########################################################
@@ -85,9 +90,13 @@ def _build_ecb_series_key(currencies: list[str]) -> str:
     return f"D.{'+'.join(currencies)}.EUR.SP00.A"
 
 
-@lru_cache(maxsize=128)
 def _fetch_ecb_window(start_period: str, end_period: str) -> list[dict[str, str]]:
  # Загружаем окно дат из ECB одним запросом.
+
+    cache_key = (start_period, end_period)
+    cached = _cache_get(_ECB_CACHE, cache_key)
+    if cached is not None:
+        return cached
 
     requested = _ecb_requested_currencies()
     series_key = _build_ecb_series_key(requested)
@@ -110,7 +119,7 @@ def _fetch_ecb_window(start_period: str, end_period: str) -> list[dict[str, str]
     rows = list(csv.DictReader(io.StringIO(resp.text)))
     if not rows:
         raise ValueError(f"ECB returned no data for {start_period} .. {end_period}")
-    return rows
+    return _cache_set(_ECB_CACHE, cache_key, rows)
 
 
 
@@ -190,9 +199,12 @@ def _parse_cbr_document(xml_text: str) -> tuple[str, dict[str, float]]:
     return actual_date, rub_rates
 
 
-@lru_cache(maxsize=128)
 def _fetch_cbr_for_requested_date(requested_date: str) -> tuple[str, dict[str, float]]:
     # Загружаем ежедневный XML CBR за указанную дату.
+
+    cached = _cache_get(_CBR_CACHE, requested_date)
+    if cached is not None:
+        return cached
 
     resp = requests.get(
         CBR_DAILY_URL,
@@ -201,7 +213,7 @@ def _fetch_cbr_for_requested_date(requested_date: str) -> tuple[str, dict[str, f
         headers={"Accept": "application/xml, text/xml"},
     )
     resp.raise_for_status()
-    return _parse_cbr_document(resp.text)
+    return _cache_set(_CBR_CACHE, requested_date, _parse_cbr_document(resp.text))
 
 
 ###########################################################
