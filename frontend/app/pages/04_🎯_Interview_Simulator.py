@@ -166,7 +166,7 @@ if candidate_profile:
 else:
     st.warning("Профиль кандидата пока не загружен.")
     
-if st.session_state.chat_messages_seed and not st.session_state.messages:
+if st.session_state.chat_messages_seed:
     st.session_state.messages = st.session_state.chat_messages_seed
     st.session_state.chat_messages_seed = None
 

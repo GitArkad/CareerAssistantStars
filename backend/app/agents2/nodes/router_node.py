@@ -12,14 +12,15 @@ def router_node(state):
     if not isinstance(state, dict):
         state = {}
 
-    state.setdefault("action", "search")
+    # ВАЖНО: не дефолтим в search
+    state.setdefault("action", None)
     state.setdefault("stage", "idle")
     state.setdefault("history", [])
     state.setdefault("top_vacancies", [])
-    
+
     agent = CareerAgent()
 
-    message = (state.get("message") or "").lower()
+    message = (state.get("message") or "").lower().strip()
 
     # -----------------------------
     # 1. FILE → parse resume
@@ -39,14 +40,21 @@ def router_node(state):
         state["last_action"] = "PDF распарсен"
 
     # -----------------------------
-    # 2. DIGIT INPUT (НЕ ТРОГАЕМ ACTION)
+    # 2. DIGIT INPUT
     # -----------------------------
     if message.isdigit():
         print("🔢 DIGIT INPUT → skip action override")
         return agent.route(state)
 
     # -----------------------------
-    # 3. COMMANDS
+    # 3. ЕСЛИ ACTION УЖЕ ОПРЕДЕЛЁН — НЕ ПЕРЕТИРАЕМ
+    # -----------------------------
+    if state.get("action") in ["fit", "roadmap", "interview", "resume"]:
+        print(f"ROUTER KEEP ACTION: {state.get('action')}")
+        return agent.route(state)
+
+    # -----------------------------
+    # 4. COMMANDS
     # -----------------------------
     if "search" in message or "найди" in message or "поиск" in message or "ваканс" in message:
         state["action"] = "search"
@@ -60,28 +68,29 @@ def router_node(state):
     elif "interview" in message or "собесед" in message:
         state["action"] = "interview"
 
+    elif "fit" in message:
+        state['action'] = "fit"
+
     # -----------------------------
-    # 4. AUTO SEARCH
+    # 5. AUTO SEARCH
     # -----------------------------
     elif (
         state.get("candidate")
         and not state.get("top_vacancies")
-        and state.get("action") not in ["resume", "roadmap", "interview"]
+        and state.get("action") not in ["resume", "roadmap", "interview", "fit", "chat"]
     ):
         print(f"ROUT_NODE 4.1  state['action'] - {state.get('action')}")
         state["action"] = "search"
         print(f"ROUT_NODE 4.2  state['action'] - {state.get('action')}")
+
     # -----------------------------
-    # 5. DEFAULT
+    # 6. DEFAULT
     # -----------------------------
     else:
-        print(f"ROUT_NODE 5.1  state['action'] - {state.get('action')}")
-        state["action"] = state.get("action", "search")
-        print(f"ROUT_NODE 5.2  state['action'] - {state.get('action')}")
-
+        print(f"ROUT_NODE DEFAULT  state['action'] - {state.get('action')}")
+        state["action"] = "chat"
 
     # -----------------------------
-    # 6. MAIN FLOW
+    # 7. MAIN FLOW
     # -----------------------------
     return agent.route(state)
-

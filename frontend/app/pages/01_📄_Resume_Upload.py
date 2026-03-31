@@ -66,8 +66,11 @@ def main():
                         profile = result.get("profile", {})
                         state = result.get("state", {})
 
-                        st.session_state.backend_state = state
+                        st.session_state.backend_state = state or {}
                         st.session_state.candidate_profile = profile
+
+                        # важно: backend fit использует state["candidate"]
+                        st.session_state.backend_state["candidate"] = profile
                         st.session_state.show_analysis = True
                         st.session_state.chat_messages_seed = [
                             {"role": "user", "content": "Я загрузил резюме"},
@@ -101,11 +104,13 @@ def main():
             nav_col1, nav_col2 = st.columns(2)
 
             with nav_col1:
-                if st.button("💼 Перейти к вакансиям", use_container_width=True):
+                if st.button("💼 Перейти к вакансиям", use_container_width=True, key="go_to_vacancies"):
+                    st.session_state.show_analysis = False
                     st.switch_page("pages/02_💼_Vacancies.py")
 
             with nav_col2:
-                if st.button("🤖 Открыть карьерный чат", use_container_width=True):
+                if st.button("🤖 Открыть карьерный чат", use_container_width=True, key="go_to_chat"):
+                    st.session_state.show_analysis = False
                     st.switch_page("pages/04_🎯_Interview_Simulator.py")
 
     with col2:
@@ -113,7 +118,7 @@ def main():
 
         profile = st.session_state.candidate_profile
 
-        if st.session_state.show_analysis and profile:
+        if profile and st.session_state.get("show_analysis", False):
             st.markdown("### 👤 Профиль кандидата")
 
             st.write(f"**Имя:** {profile.get('name', '-')}")

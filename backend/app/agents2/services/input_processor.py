@@ -26,22 +26,32 @@ class InputProcessor:
             # state["action"] = "search"
 
         # -------------------------
-        # MESSAGE → intent
+        # MESS AGE → intent
         # -------------------------
         if message:
-            msg = message.lower()
+            msg = message.lower().strip()
 
-            # if "roadmap" in msg:
-            #     state["action"] = "roadmap"
-            if "интерв" in msg:
-                state["action"] = "interview"
+            # выбор вакансии по номеру
+            if msg.isdigit() and state.get("stage") == "waiting_vacancy_choice":
+                state["action"] = "resume"
+
+            # команды
+            elif msg in ["roadmap", "interview", "fit", "fit analysis"]:
+                if msg in ["fit", "fit analysis"]:
+                    state["action"] = "fit"
+                else:
+                    state["action"] = msg
+
+            # анализ резюме
             elif "резюме" in msg:
                 state["action"] = "resume"
-            elif "ваканс" in msg or "job" in msg:
+
+            # поиск вакансий ТОЛЬКО если явно про вакансии
+            elif "ваканс" in msg or "job" in msg or "работ" in msg:
                 state["action"] = "search"
 
             # добавление скиллов
-            if "добавь" in msg:
+            elif "добавь" in msg:
                 skills = self.extract_skills(msg)
                 candidate = state.get("candidate", {})
                 current = set(candidate.get("skills", []))
@@ -49,6 +59,10 @@ class InputProcessor:
                 candidate["skills"] = list(current)
                 state["candidate"] = candidate
 
+            # 👉 ВАЖНО: дефолт
+            else:
+                state["action"] = "chat"
+            
         return state
 
     def extract_skills(self, text):

@@ -105,7 +105,24 @@ class CareerAgent:
         print(f"career main_route do  state['action'] - {state.get('action', 'search')}")
         message = (state.get("message") or "").strip().lower()
         stage = (state.get("stage") or "").strip()
-        
+        # -----------------------------
+        # UNIVERSAL VACANCY CHOICE
+        # работает не только для resume-stage,
+        # но и для выбора вакансии со страницы вакансий
+        # -----------------------------
+        if message.isdigit() and state.get("top_vacancies"):
+            idx = int(message)
+            top_vacancies = state.get("top_vacancies", [])
+
+            if 0 < idx <= len(top_vacancies):
+                selected = top_vacancies[idx - 1]
+                state["selected_vacancy"] = selected
+                state["response"] = {
+                    "message": f"Выбрана вакансия: {selected.get('title', 'Без названия')}",
+                    "vacancy": selected,
+                }
+                state["last_action"] = "Агент отработал: select_vacancy"
+                return state
         print(f"DEBUG AGENT: stage='{stage}', action='{state.get('action')}'")
 
         # --- КРИТИЧЕСКАЯ ПРАВКА ---
@@ -239,7 +256,47 @@ class CareerAgent:
                 for v in top_vacancies
                 for skill in v.get("skills", [])
             })
+        if action == "fit":
+            selected = state.get("selected_vacancy")
+            candidate = state.get("candidate", {})
 
+            if not selected:
+                state["response"] = "Сначала выбери вакансию (введи номер из списка)."
+                return state
+
+            candidate_skills = set(s.lower() for s in candidate.get("skills", []))
+            vacancy_skills = set(s.lower() for s in selected.get("skills", []))
+
+            # пересечение
+            match = candidate_skills & vacancy_skills
+            missing = vacancy_skills - candidate_skills
+
+            # score
+            if vacancy_skills:
+                score = int(len(match) / len(vacancy_skills) * 100)
+            else:
+                score = 50
+
+            response = f"""
+            📊 Fit analysis: {selected.get("title")}
+
+            Match score: {score}%
+
+            ✅ Сильные стороны:
+            {', '.join(match) if match else 'нет совпадений'}
+
+            ❌ Пробелы:
+            {', '.join(missing) if missing else 'нет'}
+
+            💡 Рекомендации:
+            - Добавь 1-2 проекта с недостающими навыками
+            - Подготовь кейсы под требования вакансии
+            """
+
+            state["response"] = response
+            state["last_action"] = "Агент отработал: fit"
+
+            return state
             # # -----------------------------
             # # LLM
             # # -----------------------------
@@ -380,7 +437,7 @@ class CareerAgent:
                 state["custom_resume"] = resume
                 state["response"] = resume
                 state["stage"] = "resume_ready"
-                state["selected_vacancy"] = None
+        
 
                 return state
 

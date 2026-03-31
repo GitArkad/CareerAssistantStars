@@ -54,7 +54,8 @@ def run_vacancy_search(api_client: APIClient, profile: dict, search_query: str):
 
 def main():
     profile = st.session_state.get("candidate_profile", {})
-
+    if profile:
+        st.session_state.backend_state["candidate"] = profile
     st.markdown("""
         <div class='page-header'>
             <h1>💼 Вакансии</h1>
@@ -174,21 +175,19 @@ def main():
         for idx, vacancy in enumerate(vacancies, start=1):
             render_vacancy_card(vacancy)
 
-            action_col1, action_col2, action_col3 = st.columns(3)
+            action_col1, action_col2, action_col3, action_col4 = st.columns(4)
 
             with action_col1:
                 if st.button(f"Выбрать #{idx}", key=f"choose_vacancy_{idx}"):
                     try:
-                        result = api_client.chat(
-                            message=str(vacancy["backend_index"]),
-                            state=st.session_state.backend_state,
-                        )
-                        st.session_state.backend_state = result.get("state", {})
-                        st.session_state.vacancies_result = result
+                        st.session_state.backend_state["selected_vacancy"] = vacancy
 
                         st.session_state.chat_messages_seed = [
                             {"role": "user", "content": f"Я выбрал вакансию #{idx}"},
-                            {"role": "assistant", "content": result.get("response", "Вакансия выбрана.")},
+                            {
+                                "role": "assistant",
+                                "content": f"Выбрана вакансия: {vacancy.get('title', 'Без названия')}. Теперь можно запросить fit analysis, roadmap или interview."
+                            },
                         ]
 
                         st.switch_page("pages/04_🎯_Interview_Simulator.py")
@@ -215,7 +214,7 @@ def main():
                             {"role": "user", "content": f"roadmap по вакансии #{idx}"},
                             {"role": "assistant", "content": result.get("response", "Нет ответа от backend")},
                         ]
-                        st.switch_page("app/pages/04_🎯_Interview_Simulator.py")
+                        st.switch_page("pages/04_🎯_Interview_Simulator.py")
                     except Exception as e:
                         st.error(f"Ошибка roadmap: {e}")
 
@@ -238,9 +237,37 @@ def main():
                             {"role": "user", "content": f"interview по вакансии #{idx}"},
                             {"role": "assistant", "content": result.get("response", "Нет ответа от backend")},
                         ]
-                        st.switch_page("app/pages/04_🎯_Interview_Simulator.py")
+                        st.switch_page("pages/04_🎯_Interview_Simulator.py")
                     except Exception as e:
                         st.error(f"Ошибка interview: {e}")
+                        
+            with action_col4:
+                if st.button(f"Fit #{idx}", key=f"fit_vacancy_{idx}"):
+                    try:
+                        # 1. Кладём выбранную вакансию напрямую в state
+                        st.session_state.backend_state["selected_vacancy"] = vacancy
+
+                        # 2. Убеждаемся, что candidate тоже есть в state
+                        if profile:
+                            st.session_state.backend_state["candidate"] = profile
+
+                        # 3. Просим backend сделать fit analysis
+                        result = api_client.chat(
+                            message="fit analysis",
+                            state=st.session_state.backend_state,
+                        )
+                        st.session_state.backend_state = result.get("state", {})
+
+                        # 4. Передаём результат в чат
+                        st.session_state.chat_messages_seed = [
+                            {"role": "user", "content": f"fit analysis по вакансии #{idx}"},
+                            {"role": "assistant", "content": result.get("response", "Нет ответа от backend")},
+                        ]
+
+                        st.switch_page("pages/04_🎯_Interview_Simulator.py")
+
+                    except Exception as e:
+                        st.error(f"Ошибка fit analysis: {e}")
 
             st.markdown("---")
     else:
