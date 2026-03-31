@@ -24,7 +24,7 @@ DEFAULT_ARGS = {
 def task_update_rates(**context) -> None:
     from src.loaders.exchange_rates import run_update_rates
 
-    date_str = context["logical_date"].strftime("%Y-%m-%d")
+    date_str = context["data_interval_end"].date().isoformat()
     result = run_update_rates(rate_date=date_str)
     context["ti"].xcom_push(key="exchange_rates_summary", value=result)
 

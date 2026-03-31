@@ -463,6 +463,33 @@ _COUNTRY_MAP = {
     "УЗБЕКИСТАН": "UZBEKISTAN",
     "UZBEKISTAN": "UZBEKISTAN",
 
+    "СЕРБИЯ": "SERBIA",
+    "SERBIA": "SERBIA",
+
+    "КИПР": "CYPRUS",
+    "CYPRUS": "CYPRUS",
+
+    "ГРУЗИЯ": "GEORGIA",
+    "GEORGIA": "GEORGIA",
+
+    "АРМЕНИЯ": "ARMENIA",
+    "ARMENIA": "ARMENIA",
+
+    "МАРОККО": "MOROCCO",
+    "MOROCCO": "MOROCCO",
+
+    "ТАИЛАНД": "THAILAND",
+    "THAILAND": "THAILAND",
+
+    "МАЛАЙЗИЯ": "MALAYSIA",
+    "MALAYSIA": "MALAYSIA",
+
+    "КАТАР": "QATAR",
+    "QATAR": "QATAR",
+
+    "ВЬЕТНАМ": "VIETNAM",
+    "VIETNAM": "VIETNAM",
+
     "BRAZIL": "BRAZIL",
     "IRELAND": "IRELAND",
     "ITALY": "ITALY",
@@ -523,6 +550,54 @@ _LOCATION_COUNTRY_HINTS = {
     "россия": "RUSSIA",
     "russia": "RUSSIA",
 
+    "москва": "RUSSIA",
+    "moscow": "RUSSIA",
+    "санкт-петербург": "RUSSIA",
+    "петербург": "RUSSIA",
+    "питер": "RUSSIA",
+    "saint petersburg": "RUSSIA",
+    "st petersburg": "RUSSIA",
+    "екатеринбург": "RUSSIA",
+    "yekaterinburg": "RUSSIA",
+    "новосибирск": "RUSSIA",
+    "novosibirsk": "RUSSIA",
+    "казань": "RUSSIA",
+    "kazan": "RUSSIA",
+    "нижний новгород": "RUSSIA",
+    "samara": "RUSSIA",
+    "самара": "RUSSIA",
+    "ростов-на-дону": "RUSSIA",
+    "краснодар": "RUSSIA",
+    "воронеж": "RUSSIA",
+    "пермь": "RUSSIA",
+    "красноярск": "RUSSIA",
+    "челябинск": "RUSSIA",
+    "уфа": "RUSSIA",
+    "томск": "RUSSIA",
+    "тюмень": "RUSSIA",
+    "иннополис": "RUSSIA",
+
+    "ташкент": "UZBEKISTAN",
+    "tashkent": "UZBEKISTAN",
+
+    "алматы": "KAZAKHSTAN",
+    "almaty": "KAZAKHSTAN",
+    "астана": "KAZAKHSTAN",
+    "astana": "KAZAKHSTAN",
+    "нур-султан": "KAZAKHSTAN",
+    "нур султан": "KAZAKHSTAN",
+
+    "минск": "BELARUS",
+    "minsk": "BELARUS",
+
+    "киев": "UKRAINE",
+    "kyiv": "UKRAINE",
+    "київ": "UKRAINE",
+    "харьков": "UKRAINE",
+    "kharkiv": "UKRAINE",
+    "львов": "UKRAINE",
+    "lviv": "UKRAINE",
+
     "казахстан": "KAZAKHSTAN",
     "kazakhstan": "KAZAKHSTAN",
 
@@ -534,6 +609,49 @@ _LOCATION_COUNTRY_HINTS = {
 
     "узбекистан": "UZBEKISTAN",
     "uzbekistan": "UZBEKISTAN",
+
+    "serbia": "SERBIA",
+    "serbian": "SERBIA",
+    "сербия": "SERBIA",
+    "belgrade": "SERBIA",
+    "beograd": "SERBIA",
+    "белград": "SERBIA",
+
+    "cyprus": "CYPRUS",
+    "кипр": "CYPRUS",
+    "limassol": "CYPRUS",
+    "лимасол": "CYPRUS",
+
+    "georgia": "GEORGIA",
+    "грузия": "GEORGIA",
+    "tbilisi": "GEORGIA",
+    "тбилиси": "GEORGIA",
+
+    "armenia": "ARMENIA",
+    "армения": "ARMENIA",
+    "yerevan": "ARMENIA",
+    "ереван": "ARMENIA",
+
+    "morocco": "MOROCCO",
+    "марокко": "MOROCCO",
+    "casablanca": "MOROCCO",
+
+    "thailand": "THAILAND",
+    "таиланд": "THAILAND",
+    "bangkok": "THAILAND",
+    "бангкок": "THAILAND",
+
+    "malaysia": "MALAYSIA",
+    "малайзия": "MALAYSIA",
+    "kuala lumpur": "MALAYSIA",
+
+    "qatar": "QATAR",
+    "катар": "QATAR",
+    "doha": "QATAR",
+
+    "vietnam": "VIETNAM",
+    "вьетнам": "VIETNAM",
+    "ho chi minh city": "VIETNAM",
 
     "brazil": "BRAZIL",
     "ireland": "IRELAND",
@@ -679,6 +797,22 @@ RU_CITY_TO_EN = {
     "витебск": "VITEBSK",
     "vitebsk": "VITEBSK",
 
+    "belgrade": "BELGRADE",
+    "beograd": "BELGRADE",
+    "белград": "BELGRADE",
+    "limassol": "LIMASSOL",
+    "лимасол": "LIMASSOL",
+    "tbilisi": "TBILISI",
+    "тбилиси": "TBILISI",
+    "yerevan": "YEREVAN",
+    "ереван": "YEREVAN",
+    "casablanca": "CASABLANCA",
+    "bangkok": "BANGKOK",
+    "бангкок": "BANGKOK",
+    "kuala lumpur": "KUALA LUMPUR",
+    "doha": "DOHA",
+    "ho chi minh city": "HO CHI MINH CITY",
+
     # --- США ---
     "new york": "NEW YORK",
     "new york city": "NEW YORK",
@@ -761,18 +895,8 @@ RU_CITY_TO_EN = {
     "warsaw": "WARSAW",
     "warszawa": "WARSAW",
     "варшава": "WARSAW",
-    "belgrade": "BELGRADE",
-    "beograd": "BELGRADE",
-    "белград": "BELGRADE",
     "lisbon": "LISBON",
     "лиссабон": "LISBON",
-    "limassol": "LIMASSOL",
-    "лимасол": "LIMASSOL",
-    "tbilisi": "TBILISI",
-    "тбилиси": "TBILISI",
-    "yerevan": "YEREVAN",
-    "ереван": "YEREVAN",
-
     "dublin": "DUBLIN",
     "madrid": "MADRID",
     "barcelona": "BARCELONA",
@@ -797,7 +921,6 @@ RU_CITY_TO_EN = {
     "thessaloniki": "THESSALONIKI",
     "utrecht": "UTRECHT",
     "aarhus": "AARHUS",
-    "casablanca": "CASABLANCA",
 
     # --- Азия / Ближний Восток ---
     "dubai": "DUBAI",
@@ -806,8 +929,6 @@ RU_CITY_TO_EN = {
     "сингапур": "SINGAPORE",
     "tel aviv": "TEL AVIV",
     "тел-авив": "TEL AVIV",
-    "bangkok": "BANGKOK",
-    "бангкок": "BANGKOK",
     "seoul": "SEOUL",
     "сеул": "SEOUL",
     "tokyo": "TOKYO",
@@ -827,10 +948,7 @@ RU_CITY_TO_EN = {
     "shanghai": "SHANGHAI",
     "taipei": "TAIPEI",
     "taipei city": "TAIPEI",
-    "kuala lumpur": "KUALA LUMPUR",
     "abu dhabi": "ABU DHABI",
-    "doha": "DOHA",
-    "ho chi minh city": "HO CHI MINH CITY",
     "herzliya": "HERZLIYA",
 
     # --- Австралия / Новая Зеландия / Африка / ЛатАм ---
@@ -912,6 +1030,15 @@ COUNTRY_DEFAULT_CURRENCY = {
     "TAIWAN": "TWD",
     "SOUTH AFRICA": "ZAR",
     "BULGARIA": "BGN",
+    "SERBIA": "RSD",
+    "CYPRUS": "EUR",
+    "GEORGIA": "GEL",
+    "ARMENIA": "AMD",
+    "MOROCCO": "MAD",
+    "THAILAND": "THB",
+    "MALAYSIA": "MYR",
+    "QATAR": "QAR",
+    "VIETNAM": "VND",
 }
 
 FALLBACK_TO_RUB_RATES = {
@@ -968,6 +1095,15 @@ MONTHLY_BOUNDS = {
     "DKK": (10_000, 250_000),
     "NZD": (2_000, 35_000),
     "HKD": (8_000, 300_000),
+
+    "RSD": (40_000, 600_000),
+    "GEL": (1_000, 25_000),
+    "AMD": (150_000, 4_000_000),
+    "MAD": (3_000, 80_000),
+    "THB": (10_000, 400_000),
+    "MYR": (2_000, 60_000),
+    "QAR": (3_000, 120_000),
+    "VND": (5_000_000, 200_000_000),
 }
 
 # Позиция
@@ -1564,6 +1700,19 @@ def _sanitize_monthly_salary_bounds(
         if ratio > 20:
             return None, None
 
+    if clean_from is not None and clean_from < lo:
+        clean_from = None
+    if clean_to is not None and clean_to < lo:
+        clean_to = None
+
+    if clean_from is None and clean_to is None:
+        return None, None
+
+    if clean_from is None and clean_to is not None:
+        clean_from = clean_to
+    if clean_to is None and clean_from is not None:
+        clean_to = clean_from
+
     return clean_from, clean_to
 
 
@@ -1710,52 +1859,66 @@ def _parse_location_parts(location: str) -> Tuple[Optional[str], Optional[str]]:
         return None, None
 
     country = _extract_country_from_haystack(text)
-    first_chunk = re.split(r"[;|/]", text, maxsplit=1)[0].strip()
-    first_chunk = re.split(r"\s+\bor\b\s+", first_chunk, maxsplit=1, flags=re.I)[0].strip()
 
-    parts = [p.strip(" -–—") for p in first_chunk.split(",") if p.strip()]
+    parts = re.split(r"[,;|/]", text)
+    parts = [p.strip(" -–—").strip() for p in parts if p and p.strip()]
+
     city = None
 
+    # 1. сначала точное совпадение по словарю городов
     for part in parts:
         p_low = part.lower()
+        if p_low in RU_CITY_TO_EN:
+            city = RU_CITY_TO_EN[p_low]
+            break
 
-        if p_low in LOCATION_NOISE_WORDS:
-            continue
-        if p_low in LOCATION_REGION_NOISE:
-            continue
-        if p_low in KNOWN_COUNTRIES_LOWER:
-            continue
-        if p_low in US_STATES or part.upper() in US_STATE_ABBR:
-            continue
-        if p_low in CA_PROVINCES or part.upper() in CA_PROVINCE_ABBR:
-            continue
+    # 2. если не нашли — ищем город внутри токена
+    if city is None:
+        lowered_text = text.lower()
+        for city_key, city_name in RU_CITY_TO_EN.items():
+            if re.search(rf"(?<!\w){re.escape(city_key)}(?!\w)", lowered_text):
+                city = city_name
+                break
 
-        city = part.upper()
-        break
+    # 3. fallback: первый валидный токен
+    if city is None:
+        for part in parts:
+            p_low = part.lower()
+
+            if p_low in LOCATION_NOISE_WORDS:
+                continue
+            if p_low in LOCATION_REGION_NOISE:
+                continue
+            if p_low in KNOWN_COUNTRIES_LOWER:
+                continue
+            if p_low in US_STATES or part.upper() in US_STATE_ABBR:
+                continue
+            if p_low in CA_PROVINCES or part.upper() in CA_PROVINCE_ABBR:
+                continue
+            if len(part.split()) > 3:
+                continue
+
+            city = part.upper()
+            break
 
     return city, country
 
 # Определяет страну по полям вакансии и fallback-правилам
 def infer_country(country, location, source: str = "", description: str = "", company_name: str = "") -> Optional[str]:
-    # 1. Явная страна из source
     if not _is_missing(country):
         key = str(country).strip().upper()
         return _COUNTRY_MAP.get(key, key)
 
-    # 2. Пробуем только location
     if not _is_missing(location):
         from_location = _extract_country_from_haystack(location)
         if from_location:
             return from_location
-        return None
 
-    # 3. Только если location вообще нет — можно смотреть description
-    haystack = str(description or "")[:500]
+    haystack = str(description or "")[:800]
     from_desc = _extract_country_from_haystack(haystack)
     if from_desc:
         return from_desc
 
-    # 4. И только в самом конце fallback по компании
     if company_name:
         comp_key = str(company_name).strip().lower()
         if comp_key in COMPANY_COUNTRY_MAP:
@@ -1831,19 +1994,13 @@ def _dedupe_key(row):
     return f"title::{source}::{company}::{title}"
 
 
-
-MAX_REASONABLE_YEARS = 25
+MAX_REASONABLE_YEARS = 15
 
 _POSITIVE_EXPERIENCE_PATTERNS = [
-    # 3-5 years of experience
     r"(\d{1,2})\s*[-–—]\s*(\d{1,2})\s+years?\s+of\s+experience",
-    # from 3 years / at least 3 years
-    r"(?:from|at\s+least|minimum\s+of|min\.?|over|more\s+than)\s*(\d{1,2})\+?\s+years?\s+(?:of\s+)?experience",
-    # 3+ years of experience
+    r"(?:from|at\s+least|minimum\s+of|min\.?|over)\s*(\d{1,2})\+?\s+years?\s+(?:of\s+)?experience",
     r"(\d{1,2})\+?\s+years?\s+of\s+experience",
-    # 3 years experience
     r"(\d{1,2})\+?\s+years?\s+experience",
-    # experience: 3 years
     r"experience.{0,25}?(\d{1,2})\+?\s+years?",
 ]
 
@@ -1863,23 +2020,34 @@ _NEGATIVE_EXPERIENCE_CONTEXT = [
     r"\bleading\b",
     r"\bglobal leader\b",
     r"\byears of innovation\b",
+    r"\bhas\s+\d+\s+years\s+of\s+experience\b",
+    r"\bbringing\s+\d+\s+years\s+of\s+experience\b",
+    r"\bteam\s+with\s+\d+\s+years\s+of\s+experience\b",
+    r"\bcompany\s+with\s+\d+\s+years\s+of\s+experience\b",
+    r"\bwe\s+have\s+\d+\s+years\s+of\s+experience\b",
+    r"\bover\s+\d+\s+years\s+of\s+experience\b",
+    r"\bmore\s+than\s+\d+\s+years\s+of\s+experience\b",
+    r"\bexperience\s+delivering\b",
+    r"\bexperience\s+serving\b",
 ]
 
 _STRONG_POSITIVE_HINTS = [
-    r"\bexperience\b",
     r"\brequirements?\b",
+    r"\bqualifications?\b",
+    r"\bwhat you bring\b",
+    r"\byou have\b",
+    r"\bmust have\b",
     r"\brequired\b",
-    r"\bmust\s+have\b",
-    r"\bnice\s+to\s+have\b",
-    r"\bqualification[s]?\b",
     r"\bminimum\b",
-    r"\bat\s+least\b",
-    r"\bcommercial\b",
+    r"\bat least\b",
     r"\bhands[- ]on\b",
+    r"\bcommercial experience\b",
+    r"\bexperience with\b",
+    r"\bexperience in\b",
 ]
 
 # Безопасно извлекает опыт только из релевантного контекста
-def _extract_years_from_text_safe(text: str) -> Tuple[Optional[int], Optional[int]]:
+def _extract_years_from_text_safe(text: str):
     if not text:
         return None, None
 
@@ -1889,41 +2057,61 @@ def _extract_years_from_text_safe(text: str) -> Tuple[Optional[int], Optional[in
         m = re.search(pat, txt, flags=re.I | re.S)
         if not m:
             continue
+
         nums = [int(g) for g in m.groups() if g is not None]
         if not nums:
             continue
+
         if len(nums) == 1:
             y1 = y2 = nums[0]
         else:
             y1, y2 = nums[0], nums[1]
+
         if y1 <= 0 or y2 <= 0:
             continue
         if y1 > MAX_REASONABLE_YEARS or y2 > MAX_REASONABLE_YEARS:
             continue
 
         start, end = m.span()
-        window = txt[max(0, start - 120): min(len(txt), end + 120)]
+        window = txt[max(0, start - 150): min(len(txt), end + 150)]
 
         negative = any(re.search(p, window, flags=re.I) for p in _NEGATIVE_EXPERIENCE_CONTEXT)
         positive = any(re.search(p, window, flags=re.I) for p in _STRONG_POSITIVE_HINTS)
-        if negative and not positive:
+
+        if negative:
             continue
 
-        return y1, y2
+        if positive:
+            return y1, y2
 
     return None, None
 
 # Извлекает опыт из приоритетных текстовых полей строки
 def _extract_years_from_row(row) -> pd.Series:
-    texts = [
+    primary_texts = [
         str(row.get("requirements") or ""),
         str(row.get("nice_to_have") or ""),
-        str(row.get("responsibilities") or ""),
-        str(row.get("title") or ""),
-        str(row.get("description") or ""),
     ]
-    for text in texts:
+
+    for text in primary_texts:
         y1, y2 = _extract_years_from_text_safe(text)
+        if y1 is not None:
+            return pd.Series({
+                "years_experience_min": y1,
+                "years_experience_max": y2,
+            })
+
+    desc = str(row.get("description") or "")
+    desc_low = desc.lower()
+
+    strong_sections = [
+        "requirements", "qualification", "qualifications",
+        "must have", "you have", "what you bring",
+        "minimum", "at least", "experience with", "experience in",
+    ]
+
+    if any(marker in desc_low for marker in strong_sections):
+        y1, y2 = _extract_years_from_text_safe(desc)
         if y1 is not None:
             return pd.Series({
                 "years_experience_min": y1,
@@ -2315,17 +2503,23 @@ def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
 
         salary_text = None
 
-        if pd.isna(sal_from) and pd.isna(sal_to):
+        needs_parse = (
+            (pd.isna(sal_from) and pd.isna(sal_to))
+            or (pd.isna(sal_from) != pd.isna(sal_to))
+            or _is_missing(currency)
+        )
+
+        if needs_parse:
             parsed_from, parsed_to, parsed_cur, parsed_period, parsed_text = extract_salary_from_text_safe(desc)
             salary_text = parsed_text
 
-            if parsed_from is not None:
+            if pd.isna(sal_from) and parsed_from is not None:
                 sal_from = parsed_from
-            if parsed_to is not None:
+            if pd.isna(sal_to) and parsed_to is not None:
                 sal_to = parsed_to
-            if parsed_cur is not None:
+            if _is_missing(currency) and parsed_cur is not None:
                 currency = parsed_cur
-            if parsed_period is not None:
+            if _is_missing(salary_period) and parsed_period is not None:
                 salary_period = parsed_period
 
         monthly_from, monthly_to = normalize_salary_to_monthly(
@@ -2628,6 +2822,15 @@ def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
         "UZBEKISTAN": ["Russian"],
         "BULGARIA": ["Bulgarian"],
         "SOUTH AFRICA": ["English"],
+        "SERBIA": ["Serbian"],
+        "CYPRUS": ["Greek"],
+        "GEORGIA": ["Georgian"],
+        "ARMENIA": ["Armenian"],
+        "MOROCCO": ["Arabic"],
+        "THAILAND": ["Thai"],
+        "MALAYSIA": ["Malay"],
+        "QATAR": ["Arabic"],
+        "VIETNAM": ["Vietnamese"],
     }
 
     # Определяет языки вакансии по данным строки

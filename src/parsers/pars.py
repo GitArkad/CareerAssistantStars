@@ -229,7 +229,10 @@ def _yrs(text: Optional[str]):
         negative = any(re.search(p, window, flags=re.I) for p in negative_context)
         positive = any(re.search(p, window, flags=re.I) for p in strong_positive_hints)
 
-        if negative and not positive:
+        if negative:
+            continue
+
+        if not positive:
             continue
 
         return (y1, y2)
@@ -554,6 +557,77 @@ class CatalogParserBase(BaseParser, ABC):
 
         logger.info("[%s] Done: %s", self.source_name, len(self.vacancies))
 
+
+def _infer_hh_country(area: dict, address: dict) -> str | None:
+    area_id = str(area.get("id") or "").strip()
+    area_name = str(area.get("name") or "").strip()
+    city_name = str(address.get("city") or "").strip()
+    address_raw = str(address.get("raw") or "").strip()
+
+    combined = " | ".join([area_name, city_name, address_raw]).strip()
+    low = combined.lower()
+
+    if area_id == "113":
+        return "Russia"
+
+    country_hints = {
+        "росс": "Russia",
+        "russia": "Russia",
+        "белар": "Belarus",
+        "belarus": "Belarus",
+        "казах": "Kazakhstan",
+        "kazakhstan": "Kazakhstan",
+        "узбек": "Uzbekistan",
+        "uzbekistan": "Uzbekistan",
+        "украин": "Ukraine",
+        "ukraine": "Ukraine",
+    }
+
+    for hint, country in country_hints.items():
+        if hint in low:
+            return country
+
+    city_hints = {
+        "минск": "Belarus",
+        "minsk": "Belarus",
+        "алматы": "Kazakhstan",
+        "almaty": "Kazakhstan",
+        "астана": "Kazakhstan",
+        "astana": "Kazakhstan",
+        "нур-султан": "Kazakhstan",
+        "нур султан": "Kazakhstan",
+        "ташкент": "Uzbekistan",
+        "tashkent": "Uzbekistan",
+        "киев": "Ukraine",
+        "kyiv": "Ukraine",
+        "київ": "Ukraine",
+        "харьков": "Ukraine",
+        "kharkiv": "Ukraine",
+        "львов": "Ukraine",
+        "lviv": "Ukraine",
+        "москва": "Russia",
+        "moscow": "Russia",
+        "санкт-петербург": "Russia",
+        "saint petersburg": "Russia",
+        "st petersburg": "Russia",
+        "петербург": "Russia",
+        "екатеринбург": "Russia",
+        "yekaterinburg": "Russia",
+        "новосибирск": "Russia",
+        "novosibirsk": "Russia",
+        "казань": "Russia",
+        "kazan": "Russia",
+    }
+
+    for hint, country in city_hints.items():
+        if hint in low:
+            return country
+
+    if any("а" <= ch.lower() <= "я" or ch.lower() == "ё" for ch in combined):
+        return "Russia"
+
+    return None
+
 # Парсер вакансий HH
 class HHParser(QueryParserBase):
     # Настраивает парсер HH
@@ -609,6 +683,8 @@ class HHParser(QueryParserBase):
         visa = True if any(w in desc_text for w in ["visa", "виза", "визовая"]) else None
         relocation = True if any(w in desc_text for w in ["relocation", "релокац", "переезд"]) else False
         employment = self._sd(v.get("employment")).get("name") or sched.get("name")
+        address = self._sd(v.get("address"))
+        resolved_country = country if country not in {None, "", "nan", "None"} else _infer_hh_country(area, address)
         return self._rec(
             source_job_id=str(v.get("id") or ""),
             title=v.get("name"),
@@ -625,8 +701,8 @@ class HHParser(QueryParserBase):
             years_min=y1,
             years_max=y2,
             key_skills=skills,
-            location=area.get("name"),
-            country=country,
+            location=(address.get("city") or address.get("raw") or area.get("name")),
+            country=resolved_country,
             remote=rem,
             remote_type="remote" if rem else "office",
             employment_type=employment,
@@ -683,6 +759,14 @@ class HHParser(QueryParserBase):
                 addr = self._sd(j.get("address"))
                 area = self._sd(j.get("area"))
 
+                if str(area.get("id") or "").strip() in {"113", "1", "2", "3", "4", "1001", "160"}:
+                    country = "Russia"
+                else:
+                    country = _infer_hh_country(area, addr)
+
+                schedule_id = ((j.get("schedule", {}) or {}).get("id") or "").lower()
+                is_remote = "remote" in schedule_id
+
                 res.append(
                     self._rec(
                         source_job_id=str(j.get("id") or ""),
@@ -692,10 +776,10 @@ class HHParser(QueryParserBase):
                         salary_from=sal.get("from"),
                         salary_to=sal.get("to"),
                         currency=sal.get("currency"),
-                        location=addr.get("city") or area.get("name"),
-                        country="Russia" if area.get("id") == "113" else None,
-                        remote=("remote" in (j.get("schedule", {}) or {}).get("id", "")),
-                        remote_type=(j.get("schedule", {}) or {}).get("id"),
+                        location=(addr.get("city") or addr.get("raw") or area.get("name")),
+                        country=country,
+                        remote=is_remote,
+                        remote_type="remote" if is_remote else "office",
                         published_at=j.get("published_at"),
                         url=j.get("alternate_url"),
                         search_query=keyword,
@@ -703,7 +787,7 @@ class HHParser(QueryParserBase):
                         years_max=y2,
                         raw_json=j,
                     )
-                )
+)
 
             pages = data.get("pages", 0)
             page += 1

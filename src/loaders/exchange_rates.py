@@ -16,7 +16,10 @@ logger = logging.getLogger(__name__)
 TARGET_CURRENCIES = ["USD", "EUR", "RUB"]
 
 # Дополнительные валюты из вакансий
-SOURCE_CURRENCIES = ["GBP", "KZT", "PLN", "UAH", "CAD", "AUD", "INR", "SGD", "BYN"]
+SOURCE_CURRENCIES = [
+    "GBP", "KZT", "PLN", "UAH", "CAD", "AUD", "INR", "SGD", "BYN",
+    "RSD", "GEL", "AMD", "MAD", "THB", "MYR", "QAR", "VND",
+]
 
 PIPELINE_CURRENCIES = sorted(set(TARGET_CURRENCIES + SOURCE_CURRENCIES))
 PIPELINE_NON_EUR = sorted(c for c in PIPELINE_CURRENCIES if c != "EUR")
