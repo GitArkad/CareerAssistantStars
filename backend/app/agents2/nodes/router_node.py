@@ -53,7 +53,7 @@ def router_node(state):
         print(f"ROUTER KEEP ACTION: {state.get('action')}")
         return agent.route(state)
 
-    # -----------------------------
+        # -----------------------------
     # 4. COMMANDS
     # -----------------------------
     if "search" in message or "найди" in message or "поиск" in message or "ваканс" in message:
@@ -69,7 +69,14 @@ def router_node(state):
         state["action"] = "interview"
 
     elif "fit" in message:
-        state['action'] = "fit"
+        state["action"] = "fit"
+
+    elif message in ["привет", "hello", "hi"]:
+        state["action"] = "chat"
+
+    elif message:
+        # любой обычный текст считаем поисковым запросом
+        state["action"] = "search"
 
     # -----------------------------
     # 5. AUTO SEARCH

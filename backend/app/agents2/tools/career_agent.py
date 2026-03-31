@@ -200,7 +200,6 @@ class CareerAgent:
         # -----------------------------
         if action == "roadmap":
 
-            # 🔥 AUTO SEARCH
             if not state.get("market") or not state.get("top_vacancies"):
                 print("⚠️ AUTO SEARCH TRIGGERED")
 
@@ -228,6 +227,33 @@ class CareerAgent:
             market_gaps = market.get("skill_gaps", [])
 
             top_vacancies = state.get("top_vacancies") or []
+
+            all_vacancy_skills = set()
+            for v in top_vacancies:
+                for s in v.get("skills", []):
+                    all_vacancy_skills.add(s.lower())
+
+            candidate_skills = set(s.lower() for s in skills)
+
+            vacancy_missing = list(all_vacancy_skills - candidate_skills)
+            missing = market_gaps or vacancy_missing
+
+            if not missing:
+                missing = ["Machine Learning", "System Design", "MLOps"]
+
+            # генерация roadmap
+            roadmap = {
+                skill: f"Изучи {skill} и сделай 1-2 проекта"
+                for skill in missing[:5]
+            }
+
+            roadmap = "\n".join([f"{k} — {v}" for k, v in roadmap.items()])
+
+            state["response"] = roadmap
+            state["roadmap"] = roadmap
+            state["last_action"] = "Агент отработал: roadmap"
+
+            return state   # ✅ ВОТ ЭТО КРИТИЧНО
 
             # -----------------------------
             # SKILL GAP по всем вакансиям
