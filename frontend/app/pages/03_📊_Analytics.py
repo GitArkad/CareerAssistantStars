@@ -1,9 +1,9 @@
+import os
 import streamlit as st
 import pandas as pd
 import plotly.express as px
+from sqlalchemy import create_engine, inspect, text
 
-from config import API_BASE_URL
-from utils.api_client import APIClient
 from utils.style_loader import apply_custom_styles
 
 apply_custom_styles()
@@ -11,53 +11,136 @@ st.set_page_config(page_title="Аналитика рынка", page_icon="📊",
 
 st.markdown("""
 <style>
-input {
+input, textarea, .stTextInput input, .stNumberInput input {
     color: black !important;
 }
-input::placeholder {
-    color: #888 !important;
+input::placeholder, textarea::placeholder {
+    color: #f7f5f5 !important;
 }
 label {
+    color: white !important;
+}
+/* универсально для всех input */
+input {
+    background-color: white !important;
     color: black !important;
+}
+
+/* контейнеры streamlit */
+div[data-baseweb="input"] {
+    background-color: white !important;
 }
 </style>
 """, unsafe_allow_html=True)
 
+# =========================
+# CONFIG
+# =========================
+DEFAULT_HOST = "16.54.110.212"
+DEFAULT_PORT = 5433
+DEFAULT_DB = "ai_career"   # замени на реальное имя БД
+DEFAULT_SCHEMA = "public"
 
-def build_df(vacancies: list[dict]) -> pd.DataFrame:
-    if not vacancies:
-        return pd.DataFrame()
+# =========================
+# COLUMN MAPPING (RU)
+# =========================
+COLUMN_MAPPING = {
+    "job_id": "ID вакансии",
+    "title": "Название",
+    "company": "Компания",
+    "city": "Город",
+    "salary_from": "ЗП от",
+    "salary_to": "ЗП до",
+    "salary_avg": "Средняя ЗП",
+    "experience": "Опыт",
+    "seniority": "Уровень",
+    "created_at": "Дата создания",
+    "updated_at": "Дата обновления",
+    "source": "Источник",
+    "remote": "Удалённо",
+    "employment_type": "Тип занятости",
+    "schedule": "График",
+    "description": "Описание",
+    "skills": "Навыки",
+    "url": "Ссылка",
+    "role": "Роль",
+    "sample_size": "Количество",
+    "count": "Количество"
+}
 
-    df = pd.DataFrame(vacancies).copy()
 
-    for col in ["salary_from", "salary_to"]:
-        if col not in df.columns:
-            df[col] = None
+def col_label(col_name: str) -> str:
+    return COLUMN_MAPPING.get(col_name, col_name)
 
-    df["salary_from"] = pd.to_numeric(df["salary_from"], errors="coerce")
-    df["salary_to"] = pd.to_numeric(df["salary_to"], errors="coerce")
 
-    df["salary_avg"] = df[["salary_from", "salary_to"]].mean(axis=1)
-    df["salary_known"] = df["salary_avg"].notna()
+def get_db_url(host: str, port: int, database: str, user: str, password: str) -> str:
+    return f"postgresql+psycopg2://{user}:{password}@{host}:{port}/{database}"
 
-    if "company_name" in df.columns and "company" not in df.columns:
-        df["company"] = df["company_name"]
 
-    if "city" not in df.columns:
-        df["city"] = "Не указано"
+@st.cache_resource(show_spinner=False)
+def get_engine(db_url: str):
+    return create_engine(db_url, pool_pre_ping=True)
 
-    if "title" not in df.columns:
-        df["title"] = "Без названия"
 
-    df["city"] = df["city"].fillna("Не указано")
-    df["company"] = df["company"].fillna("Не указано")
-    df["title"] = df["title"].fillna("Без названия")
+@st.cache_data(ttl=60, show_spinner=False)
+def get_tables(db_url: str, schema: str):
+    engine = get_engine(db_url)
+    inspector = inspect(engine)
+    return inspector.get_table_names(schema=schema)
 
-    return df
+
+@st.cache_data(ttl=60, show_spinner=False)
+def get_columns(db_url: str, schema: str, table_name: str):
+    engine = get_engine(db_url)
+    inspector = inspect(engine)
+    cols = inspector.get_columns(table_name, schema=schema)
+    return [c["name"] for c in cols]
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def load_data(db_url: str, query: str) -> pd.DataFrame:
+    engine = get_engine(db_url)
+    with engine.connect() as conn:
+        return pd.read_sql(text(query), conn)
+
+
+def guess_date_column(df: pd.DataFrame):
+    for col in df.columns:
+        col_lower = str(col).lower()
+        if any(x in col_lower for x in ["date", "created", "updated", "time", "posted"]):
+            try:
+                parsed = pd.to_datetime(df[col], errors="coerce")
+                if parsed.notna().sum() > 0:
+                    return col
+            except Exception:
+                pass
+    return None
+
+
+def guess_salary_column(df: pd.DataFrame):
+    candidates = [
+        "salary_avg", "salary_from", "salary_to",
+        "salary", "compensation", "income"
+    ]
+    for col in candidates:
+        if col in df.columns:
+            return col
+    return None
+
+
+def guess_category_column(df: pd.DataFrame):
+    candidates = ["city", "company", "title", "seniority", "source", "experience"]
+    for col in candidates:
+        if col in df.columns:
+            return col
+    for col in df.columns:
+        if df[col].dtype == "object":
+            return col
+    return None
 
 
 def safe_top_words(series: pd.Series, n: int = 15) -> pd.DataFrame:
-    words: dict[str, int] = {}
+    words = {}
 
     for value in series.dropna():
         for word in str(value).replace("/", " ").replace(",", " ").split():
@@ -76,225 +159,380 @@ def safe_top_words(series: pd.Series, n: int = 15) -> pd.DataFrame:
 def main():
     st.markdown("""
         <div class='page-header'>
-            <h1>📊 Аналитика рынка</h1>
-            <p>Интерактивный dashboard по вакансиям из backend API</p>
+            <h1>📊 Аналитика из PostgreSQL</h1>
+            <p>BI-страница в стиле mini-Superset: таблицы, фильтры, SQL и графики</p>
         </div>
     """, unsafe_allow_html=True)
 
-    api_client = APIClient(API_BASE_URL)
+    with st.sidebar:
+        st.markdown("## ⚙️ Подключение к БД")
 
-    st.markdown("### 🔎 Фильтры")
+        host = st.text_input("Host", value=os.getenv("POSTGRES_HOST", DEFAULT_HOST))
+        port = st.number_input(
+            "Port",
+            min_value=1,
+            max_value=65535,
+            value=int(os.getenv("POSTGRES_PORT", DEFAULT_PORT))
+        )
+        database = st.text_input("Database", value=os.getenv("POSTGRES_DB", DEFAULT_DB))
+        schema = st.text_input("Schema", value=os.getenv("POSTGRES_SCHEMA", DEFAULT_SCHEMA))
+        user = st.text_input("User", value=os.getenv("POSTGRES_USER", "postgres"))
+        password = st.text_input("Password", value=os.getenv("POSTGRES_PASSWORD", ""), type="password")
 
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        experience = st.selectbox("Опыт", ["Все", "Junior", "Middle", "Senior", "Lead"])
-    with col2:
-        remote_only = st.selectbox("Формат", ["Все", "Только удалённо"])
-    with col3:
-        limit = st.slider("Сколько вакансий загрузить", 20, 300, 100, 20)
-    with col4:
-        min_salary = st.number_input("Мин. зарплата", min_value=0, value=0, step=50000)
+        connect_btn = st.button("Подключиться", use_container_width=True)
 
-    selected_seniority = None if experience == "Все" else experience.lower()
-    selected_remote = True if remote_only == "Только удалённо" else None
+    if "db_connected" not in st.session_state:
+        st.session_state.db_connected = False
+    if "db_url" not in st.session_state:
+        st.session_state.db_url = None
+
+    if connect_btn:
+        try:
+            db_url = get_db_url(host, port, database, user, password)
+            engine = get_engine(db_url)
+            with engine.connect() as conn:
+                conn.execute(text("SELECT 1"))
+            st.session_state.db_connected = True
+            st.session_state.db_url = db_url
+            st.success("Подключение к PostgreSQL успешно.")
+        except Exception as e:
+            st.session_state.db_connected = False
+            st.error(f"Ошибка подключения к PostgreSQL: {e}")
+
+    if not st.session_state.db_connected or not st.session_state.db_url:
+        st.info("Заполни параметры подключения слева и нажми «Подключиться».")
+        return
+
+    db_url = st.session_state.db_url
 
     try:
-        with st.spinner("Загрузка аналитики..."):
-            response = api_client.get_jobs(
-                seniority=selected_seniority,
-                remote=selected_remote,
-                limit=limit
-            )
-
-        if isinstance(response, dict):
-            vacancies = response.get("data", [])
-        elif isinstance(response, list):
-            vacancies = response
-        else:
-            vacancies = []
-
+        tables = get_tables(db_url, schema)
     except Exception as e:
-        st.error(f"Ошибка загрузки аналитики: {e}")
+        st.error(f"Не удалось получить список таблиц: {e}")
         return
 
-    df = build_df(vacancies)
-
-    if df.empty:
-        st.warning("Нет данных для построения аналитики.")
+    if not tables:
+        st.warning(f"В схеме '{schema}' нет таблиц.")
         return
 
-    if min_salary > 0:
-        df = df[(df["salary_from"].fillna(0) >= min_salary) | (df["salary_to"].fillna(0) >= min_salary)]
+    st.markdown("### 🗂 Источник данных")
+
+    top1, top2 = st.columns([2, 3])
+
+    with top1:
+        selected_table = st.selectbox("Таблица", tables)
+
+    try:
+        columns = get_columns(db_url, schema, selected_table)
+    except Exception as e:
+        st.error(f"Не удалось получить колонки таблицы: {e}")
+        return
+
+    default_limit = 100000
+
+    with top2:
+        st.caption("Можно использовать автозагрузку таблицы или написать свой SQL.")
+        mode = st.radio("Режим", ["Таблица", "SQL"], horizontal=True)
+
+    if mode == "Таблица":
+        query = f'SELECT * FROM "{schema}"."{selected_table}" LIMIT {default_limit}'
+    else:
+        query = st.text_area(
+            "SQL запрос",
+            value=f'SELECT * FROM "{schema}"."{selected_table}" LIMIT {default_limit}',
+            height=140
+        )
+
+    with st.expander("Показать SQL"):
+        st.code(query, language="sql")
+
+    try:
+        with st.spinner("Загрузка данных из PostgreSQL..."):
+            df = load_data(db_url, query)
+    except Exception as e:
+        st.error(f"Ошибка выполнения SQL: {e}")
+        return
 
     if df.empty:
+        st.warning("Запрос не вернул данных.")
+        return
+
+    # Попытка привести даты
+    for col in df.columns:
+        if df[col].dtype == "object":
+            try:
+                converted = pd.to_datetime(df[col], errors="ignore")
+                df[col] = converted
+            except Exception:
+                pass
+
+    # Фильтры
+    st.markdown("### 🔎 Фильтры")
+    date_col = guess_date_column(df)
+    category_col = guess_category_column(df)
+    salary_col = guess_salary_column(df)
+
+    f1, f2, f3 = st.columns(3)
+
+    filtered_df = df.copy()
+
+    with f1:
+        if category_col and category_col in filtered_df.columns:
+            options = sorted([str(x) for x in filtered_df[category_col].dropna().astype(str).unique().tolist()])
+            selected_values = st.multiselect(
+                f"Фильтр по {col_label(category_col)}",
+                options
+            )
+            if selected_values:
+                filtered_df = filtered_df[filtered_df[category_col].astype(str).isin(selected_values)]
+        else:
+            st.write(" ")
+
+    with f2:
+        if salary_col and salary_col in filtered_df.columns:
+            filtered_df[salary_col] = pd.to_numeric(filtered_df[salary_col], errors="coerce")
+            min_val = int(filtered_df[salary_col].dropna().min()) if filtered_df[salary_col].dropna().shape[0] else 0
+            max_val = int(filtered_df[salary_col].dropna().max()) if filtered_df[salary_col].dropna().shape[0] else 0
+
+            if max_val > min_val:
+                salary_range = st.slider(
+                    f"Диапазон: {col_label(salary_col)}",
+                    min_value=min_val,
+                    max_value=max_val,
+                    value=(min_val, max_val)
+                )
+                filtered_df = filtered_df[
+                    filtered_df[salary_col].fillna(0).between(salary_range[0], salary_range[1])
+                ]
+        else:
+            st.write(" ")
+
+    with f3:
+        if date_col and date_col in filtered_df.columns:
+            parsed_dates = pd.to_datetime(filtered_df[date_col], errors="coerce").dropna()
+            if not parsed_dates.empty:
+                min_date = parsed_dates.min().date()
+                max_date = parsed_dates.max().date()
+                selected_dates = st.date_input(
+                    f"Период по {col_label(date_col)}",
+                    value=(min_date, max_date),
+                    min_value=min_date,
+                    max_value=max_date
+                )
+                if isinstance(selected_dates, tuple) and len(selected_dates) == 2:
+                    start_date, end_date = selected_dates
+                    date_series = pd.to_datetime(filtered_df[date_col], errors="coerce")
+                    filtered_df = filtered_df[
+                        (date_series.dt.date >= start_date) &
+                        (date_series.dt.date <= end_date)
+                    ]
+        else:
+            st.write(" ")
+
+    if filtered_df.empty:
         st.warning("После применения фильтров данные отсутствуют.")
         return
 
     # KPI
     st.markdown("### 📌 Ключевые метрики")
-
-    total_jobs = len(df)
-    jobs_with_salary = int(df["salary_known"].sum())
-    avg_salary = round(df["salary_avg"].dropna().mean(), 0) if jobs_with_salary else 0
-    median_salary = round(df["salary_avg"].dropna().median(), 0) if jobs_with_salary else 0
+    total_rows = len(filtered_df)
+    total_cols = len(filtered_df.columns)
+    null_cells = int(filtered_df.isna().sum().sum())
 
     c1, c2, c3, c4 = st.columns(4)
-    with c1:
-        st.metric("Всего вакансий", total_jobs)
-    with c2:
-        st.metric("С известной зарплатой", jobs_with_salary)
-    with c3:
-        st.metric("Средняя зарплата", f"{avg_salary:,.0f} ₽".replace(",", " "))
-    with c4:
-        st.metric("Медианная зарплата", f"{median_salary:,.0f} ₽".replace(",", " "))
+    c1.metric("Строк", total_rows)
+    c2.metric("Колонок", total_cols)
+    c3.metric("Пустых значений", null_cells)
 
-    # 1–2
-    row1_col1, row1_col2 = st.columns(2)
+    if salary_col and salary_col in filtered_df.columns:
+        filtered_df[salary_col] = pd.to_numeric(filtered_df[salary_col], errors="coerce")
+        avg_salary = round(filtered_df[salary_col].dropna().mean(), 0) if filtered_df[salary_col].notna().sum() else 0
+        c4.metric(f"Среднее по {col_label(salary_col)}", f"{avg_salary:,.0f}".replace(",", " "))
+    else:
+        c4.metric("Среднее", "—")
 
-    with row1_col1:
-        city_counts = df["city"].value_counts().head(10).reset_index()
-        city_counts.columns = ["city", "count"]
-        fig = px.bar(city_counts, x="city", y="count", title="Топ городов по числу вакансий")
-        st.plotly_chart(fig, use_container_width=True)
+    # Авто-визуализации
+    st.markdown("### 📈 Визуализации")
 
-    with row1_col2:
-        company_counts = df["company"].value_counts().head(10).reset_index()
-        company_counts.columns = ["company", "count"]
-        fig = px.bar(company_counts, x="company", y="count", title="Топ компаний по числу вакансий")
-        st.plotly_chart(fig, use_container_width=True)
+    left, right = st.columns(2)
 
-    # 3–4
-    row2_col1, row2_col2 = st.columns(2)
-
-    with row2_col1:
-        if jobs_with_salary:
-            fig = px.histogram(
-                df[df["salary_known"]],
-                x="salary_avg",
-                nbins=20,
-                title="Распределение средних зарплат"
-            )
-            st.plotly_chart(fig, use_container_width=True)
-        else:
-            st.info("Нет данных для распределения зарплат.")
-
-    with row2_col2:
-        if jobs_with_salary:
-            city_salary = (
-                df[df["salary_known"]]
-                .groupby("city", as_index=False)["salary_avg"]
-                .mean()
-                .sort_values("salary_avg", ascending=False)
+    with left:
+        if category_col and category_col in filtered_df.columns:
+            vc = (
+                filtered_df[category_col]
+                .astype(str)
+                .value_counts()
                 .head(10)
+                .reset_index()
             )
-            fig = px.bar(city_salary, x="city", y="salary_avg", title="Средняя зарплата по городам")
+            vc.columns = [category_col, "count"]
+            fig = px.bar(
+                vc,
+                x=category_col,
+                y="count",
+                title=f"Топ значений: {col_label(category_col)}",
+                labels={
+                    category_col: col_label(category_col),
+                    "count": col_label("count")
+                }
+            )
             st.plotly_chart(fig, use_container_width=True)
         else:
-            st.info("Нет данных для средней зарплаты по городам.")
+            st.info("Нет категориальной колонки для столбчатой диаграммы.")
 
-    # 5–6
-    row3_col1, row3_col2 = st.columns(2)
+    with right:
+        numeric_cols = filtered_df.select_dtypes(include=["number"]).columns.tolist()
+        hist_col = salary_col if salary_col in numeric_cols else (numeric_cols[0] if numeric_cols else None)
 
-    with row3_col1:
-        title_words = safe_top_words(df["title"], n=15)
-        if not title_words.empty:
-            fig = px.bar(title_words, x="word", y="count", title="Частые слова в названиях вакансий")
+        if hist_col:
+            fig = px.histogram(
+                filtered_df,
+                x=hist_col,
+                nbins=30,
+                title=f"Распределение: {col_label(hist_col)}",
+                labels={
+                    hist_col: col_label(hist_col),
+                    "count": col_label("count")
+                }
+            )
+
+            fig.update_xaxes(title_text=col_label(hist_col))
+            fig.update_yaxes(title_text=col_label("count"))
+
             st.plotly_chart(fig, use_container_width=True)
         else:
-            st.info("Недостаточно данных по названиям.")
+            st.info("Нет числовой колонки для гистограммы.")
 
-    with row3_col2:
-        salary_coverage = pd.DataFrame({
-            "category": ["С зарплатой", "Без зарплаты"],
-            "count": [jobs_with_salary, total_jobs - jobs_with_salary]
-        })
-        fig = px.pie(salary_coverage, values="count", names="category", hole=0.45, title="Заполненность зарплат")
-        st.plotly_chart(fig, use_container_width=True)
+    left2, right2 = st.columns(2)
 
-    # 7–8
-    row4_col1, row4_col2 = st.columns(2)
+    with left2:
+        if date_col and category_col:
+            ts_df = filtered_df.copy()
+            ts_df[date_col] = pd.to_datetime(ts_df[date_col], errors="coerce")
+            ts_df = ts_df.dropna(subset=[date_col])
 
-    with row4_col1:
-        if "salary_from" in df.columns and "salary_to" in df.columns:
-            salary_compare = df[df["salary_known"]][["title", "salary_from", "salary_to"]].head(20)
-            if not salary_compare.empty:
-                melted = salary_compare.melt(
-                    id_vars="title",
-                    value_vars=["salary_from", "salary_to"],
-                    var_name="type",
-                    value_name="value"
+            if not ts_df.empty:
+                ts_grouped = (
+                    ts_df.groupby(ts_df[date_col].dt.date)
+                    .size()
+                    .reset_index(name="count")
                 )
-                fig = px.bar(
-                    melted,
-                    x="title",
-                    y="value",
-                    color="type",
-                    barmode="group",
-                    title="Salary from / to по вакансиям"
+                ts_grouped.columns = [date_col, "count"]
+
+                fig = px.line(
+                    ts_grouped,
+                    x=date_col,
+                    y="count",
+                    title=f"Динамика по {col_label(date_col)}",
+                    labels={
+                        date_col: col_label(date_col),
+                        "count": col_label("count")
+                    }
                 )
                 st.plotly_chart(fig, use_container_width=True)
             else:
-                st.info("Нет данных для сравнения salary_from / salary_to.")
-
-    with row4_col2:
-        jobs_per_salary_band = pd.cut(
-            df["salary_avg"],
-            bins=[0, 100000, 200000, 300000, 500000, 1000000],
-            labels=["0-100k", "100-200k", "200-300k", "300-500k", "500k+"]
-        ).value_counts().sort_index().reset_index()
-        jobs_per_salary_band.columns = ["band", "count"]
-        fig = px.bar(jobs_per_salary_band, x="band", y="count", title="Вакансии по зарплатным диапазонам")
-        st.plotly_chart(fig, use_container_width=True)
-
-    # 9–10
-    row5_col1, row5_col2 = st.columns(2)
-
-    with row5_col1:
-        top_salary_jobs = (
-            df[df["salary_known"]]
-            .sort_values("salary_avg", ascending=False)
-            .head(10)[["title", "company", "city", "salary_avg"]]
-        )
-        if not top_salary_jobs.empty:
-            fig = px.bar(
-                top_salary_jobs,
-                x="title",
-                y="salary_avg",
-                color="city",
-                title="Топ вакансий по средней зарплате"
-            )
-            st.plotly_chart(fig, use_container_width=True)
+                st.info("Нет данных для временного ряда.")
         else:
-            st.info("Нет данных по самым высокооплачиваемым вакансиям.")
+            st.info("Не найдена дата-колонка для линейного графика.")
 
-    with row5_col2:
-        city_vs_company = (
-            df.groupby(["city", "company"], as_index=False)
-            .size()
-            .rename(columns={"size": "count"})
-            .sort_values("count", ascending=False)
-            .head(20)
-        )
-        fig = px.scatter(
-            city_vs_company,
-            x="city",
-            y="company",
-            size="count",
-            title="Города × компании"
-        )
+    with right2:
+        text_col = "title" if "title" in filtered_df.columns else category_col
+        if text_col and text_col in filtered_df.columns:
+            words_df = safe_top_words(filtered_df[text_col], n=15)
+            if not words_df.empty:
+                fig = px.bar(
+                    words_df,
+                    x="word",
+                    y="count",
+                    title=f"Частые слова: {col_label(text_col)}",
+                    labels={
+                        "word": "Дожность",
+                        "count": "Количество"
+                    }
+                )
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.info("Недостаточно текстовых данных.")
+        else:
+            st.info("Нет текстовой колонки для анализа слов.")
+
+    # Пользовательские графики
+    st.markdown("### 🛠 Конструктор графика")
+
+    numeric_cols = filtered_df.select_dtypes(include=["number"]).columns.tolist()
+    all_cols = filtered_df.columns.tolist()
+
+    col_options = {col_label(col): col for col in all_cols}
+    numeric_options = {col_label(col): col for col in numeric_cols} if numeric_cols else col_options
+
+    p1, p2, p3 = st.columns(3)
+
+    with p1:
+        chart_type = st.selectbox("Тип графика", ["bar", "line", "scatter", "pie"])
+
+    with p2:
+        x_label_selected = st.selectbox("Ось X", list(col_options.keys()))
+        x_col = col_options[x_label_selected]
+
+    with p3:
+        y_label_selected = st.selectbox("Ось Y", list(numeric_options.keys()))
+        y_col = numeric_options[y_label_selected]
+
+    try:
+        if chart_type == "bar":
+            plot_df = filtered_df.groupby(x_col, dropna=False)[y_col].mean().reset_index().head(30)
+            fig = px.bar(
+                plot_df,
+                x=x_col,
+                y=y_col,
+                title=f"Столбчатая диаграмма: {col_label(x_col)} × {col_label(y_col)}",
+                labels={x_col: col_label(x_col), y_col: col_label(y_col)}
+            )
+        elif chart_type == "line":
+            plot_df = filtered_df.groupby(x_col, dropna=False)[y_col].mean().reset_index().head(100)
+            fig = px.line(
+                plot_df,
+                x=x_col,
+                y=y_col,
+                title=f"Линейный график: {col_label(x_col)} × {col_label(y_col)}",
+                labels={x_col: col_label(x_col), y_col: col_label(y_col)}
+            )
+        elif chart_type == "scatter":
+            fig = px.scatter(
+                filtered_df.head(1000),
+                x=x_col,
+                y=y_col,
+                title=f"Точечный график: {col_label(x_col)} × {col_label(y_col)}",
+                labels={x_col: col_label(x_col), y_col: col_label(y_col)}
+            )
+        else:
+            pie_df = filtered_df[x_col].astype(str).value_counts().head(10).reset_index()
+            pie_df.columns = [x_col, "count"]
+            fig = px.pie(
+                pie_df,
+                names=x_col,
+                values="count",
+                title=f"Круговая диаграмма: {col_label(x_col)}",
+                labels={x_col: col_label(x_col), "count": "Количество"}
+            )
+
         st.plotly_chart(fig, use_container_width=True)
+    except Exception as e:
+        st.warning(f"Не удалось построить пользовательский график: {e}")
 
-    # Таблицы
-    st.markdown("### 🧾 Таблица вакансий")
-    st.dataframe(
-        df[["job_id", "title", "company", "city", "salary_from", "salary_to", "salary_avg"]].copy(),
+    # Данные
+    st.markdown("### 🧾 Данные")
+    display_df = filtered_df.rename(columns=COLUMN_MAPPING)
+    st.dataframe(display_df, use_container_width=True)
+
+    csv_data = display_df.to_csv(index=False).encode("utf-8-sig")
+    st.download_button(
+        "Скачать CSV",
+        data=csv_data,
+        file_name=f"{selected_table}_analytics.csv",
+        mime="text/csv",
         use_container_width=True
     )
-
-    if jobs_with_salary:
-        st.markdown("### 📈 Описательная статистика зарплат")
-        stats_df = df["salary_avg"].dropna().describe().round(2).to_frame(name="salary_avg")
-        st.dataframe(stats_df, use_container_width=True)
 
 
 if __name__ == "__main__":
