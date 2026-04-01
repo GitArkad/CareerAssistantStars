@@ -211,7 +211,7 @@ async def chat_legacy(
         if not thread_id:
             thread_id = str(uuid.uuid4())
 
-        config = {"configurable": {"thread_id": thread_id}, "recursion_limit": 10}
+        config = {"configurable": {"thread_id": thread_id}, "recursion_limit": 5}
         logger.info(f"📥 /chat: message='{(message or '')[:30]}...', thread_id={thread_id}")
 
         if not message and not file:
