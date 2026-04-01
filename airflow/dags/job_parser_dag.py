@@ -74,7 +74,7 @@ def _resolve_date_str(context) -> str:
     return logical_date.strftime("%Y-%m-%d")
 
 # Запускает один парсер и сохраняет raw CSV в S3
-def _run_single_parser(cls_name: str, mode: str, **context) -> None:
+def _run_single_parser(cls_name: str, **context) -> None:
     from src.loaders.s3_storage import ensure_bucket, raw_key, upload_df
 
     ti = context["ti"]
@@ -160,22 +160,19 @@ def task_aggregate_v2(**context) -> None:
     summary = run_aggregate_v2_step()
     context["ti"].xcom_push(key="aggregate_v2_summary", value=summary)
 
-# Пересчитывает старые агрегаты
-def task_aggregate(**context) -> None:
-    from src.aggregators.aggregate import run_aggregate_step
-
-    summary = run_aggregate_step()
-    context["ti"].xcom_push(key="aggregate_summary", value=summary)
-
 # Отправляет pending вакансии в embeddings
 def task_embed(**context) -> None:
     from src.loaders.qdrant_service import run_embedding_step
-    summary = run_embedding_step(date_str=None)
-    context["ti"].xcom_push(key="embed_summary", value=summary)
+
+    ti = context["ti"]
+    date_str = ti.xcom_pull(task_ids="collect_keys", key="date_str")
+
+    summary = run_embedding_step(date_str=date_str)
+    ti.xcom_push(key="embed_summary", value=summary)
 
 with DAG(
     dag_id="jobs_pipeline_weekly",
-    description="Jobs pipeline every 2 days: parallel parse -> collect -> clean -> load -> job_skills -> aggregate_v2 -> aggregate -> embed",
+    description="Jobs pipeline every 2 days: parallel parse -> collect -> clean -> load -> job_skills -> aggregate_v2 -> embed",
     default_args=DEFAULT_ARGS,
     start_date=datetime(2026, 3, 1),
     schedule=timedelta(days=2),
@@ -191,7 +188,6 @@ with DAG(
             python_callable=_run_single_parser,
             op_kwargs={
                 "cls_name": parser_cfg["cls"],
-                "mode": parser_cfg["mode"],
             },
             execution_timeout=timedelta(hours=parser_cfg["timeout_h"]),
             retries=1,
@@ -232,16 +228,10 @@ with DAG(
         execution_timeout=timedelta(minutes=30),
     )
 
-    aggregate = PythonOperator(
-        task_id="aggregate",
-        python_callable=task_aggregate,
-        execution_timeout=timedelta(minutes=30),
-    )
-
     embed = PythonOperator(
         task_id="embed",
         python_callable=task_embed,
         execution_timeout=timedelta(hours=2),
     )
 
-    parse_tasks >> collect >> clean >> load >> refresh_job_skills >> aggregate_v2 >> aggregate >> embed
+    parse_tasks >> collect >> clean >> load >> refresh_job_skills >> aggregate_v2 >> embed

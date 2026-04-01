@@ -2194,36 +2194,166 @@ def extract_specialty_from_title(title: str) -> Optional[str]:
         (r"\bbusiness analyst\b", "Business Analyst"),
         (r"\bproduct analyst\b", "Product Analyst"),
         (r"\bdata analyst\b", "Data Analyst"),
+
+        (r"\bdata scientist\b", "Data Scientist"),
+        (r"\bmachine learning engineer\b", "Machine Learning Engineer"),
+        (r"\bml engineer\b", "ML Engineer"),
+        (r"\bai engineer\b", "AI Engineer"),
+        (r"\bnlp engineer\b", "NLP Engineer"),
+        (r"\bllm engineer\b", "LLM Engineer"),
+
+        (r"\bdata engineer\b", "Data Engineer"),
+        (r"\banalytics engineer\b", "Analytics Engineer"),
+
         (r"\bfirmware engineer\b", "Firmware Engineer"),
         (r"\bembedded engineer\b", "Embedded Engineer"),
         (r"\bflight sciences engineer\b", "Flight Sciences Engineer"),
         (r"\bflight software engineer\b", "Flight Software Engineer"),
+
+        (r"\bback[ -]?end engineer\b", "Backend Engineer"),
+        (r"\bback[ -]?end developer\b", "Backend Developer"),
         (r"\bsoftware engineer\b", "Software Engineer"),
-        (r"\bbackend engineer\b", "Backend Engineer"),
-        (r"\bfrontend engineer\b", "Frontend Engineer"),
+        (r"\bsoftware developer\b", "Software Developer"),
+
+        (r"\bfront[ -]?end engineer\b", "Frontend Engineer"),
+        (r"\bfront[ -]?end developer\b", "Frontend Developer"),
+
         (r"\bfull stack engineer\b", "Full Stack Engineer"),
         (r"\bfullstack engineer\b", "Fullstack Engineer"),
+        (r"\bfull stack developer\b", "Full Stack Developer"),
+        (r"\bfullstack developer\b", "Fullstack Developer"),
+
+        (r"\bandroid developer\b", "Android Developer"),
+        (r"\bandroid engineer\b", "Android Engineer"),
+        (r"\bios developer\b", "iOS Developer"),
+        (r"\bios engineer\b", "iOS Engineer"),
+        (r"\bmobile developer\b", "Mobile Developer"),
+        (r"\bmobile engineer\b", "Mobile Engineer"),
+
+        (r"\bdevops engineer\b", "DevOps Engineer"),
+        (r"\bsite reliability engineer\b", "Site Reliability Engineer"),
+        (r"\bsre\b", "Site Reliability Engineer"),
+        (r"\bplatform engineer\b", "Platform Engineer"),
+
+        (r"\bqa engineer\b", "QA Engineer"),
+        (r"\btest engineer\b", "Test Engineer"),
+        (r"\bsdet\b", "SDET"),
+
+        (r"\bsecurity engineer\b", "Security Engineer"),
+
+        (r"\bproduct manager\b", "Product Manager"),
+        (r"\bproject manager\b", "Project Manager"),
+        (r"\bengineering manager\b", "Engineering Manager"),
+
+        (r"\bsolutions architect\b", "Solutions Architect"),
+        (r"\bsolutions engineer\b", "Solutions Engineer"),
+        (r"\bsales engineer\b", "Sales Engineer"),
+
+        (r"\bproduct designer\b", "Product Designer"),
+        (r"\bux designer\b", "UX Designer"),
+        (r"\bui designer\b", "UI Designer"),
+        (r"\bux/ui designer\b", "UX/UI Designer"),
+
+        (r"\bdesigner\b", "Designer"),
     ]
+
     for pat, label in specific_patterns:
         if re.search(pat, t, flags=re.I):
             return label
 
-    if re.search(r"\banalyst\b", t, flags=re.I):
-        return "Analyst"
-    if re.search(r"\bengineer\b", t, flags=re.I):
-        return "Engineer"
-    if re.search(r"\bdeveloper\b", t, flags=re.I):
-        return "Developer"
-    if re.search(r"\bmanager\b", t, flags=re.I):
-        return "Manager"
-    if re.search(r"\barchitect\b", t, flags=re.I):
-        return "Architect"
-    if re.search(r"\bdesigner\b", t, flags=re.I):
-        return "Designer"
-    if re.search(r"\bspecialist\b", t, flags=re.I):
-        return "Specialist"
-
     return None
+
+def extract_analytics_role_from_title(title: str) -> Optional[str]:
+    if _is_missing(title):
+        return None
+
+    t = _normalize_specialty_text(title)
+
+    # 1. Сначала только точные совпадения из query-словаря
+    for query_key in _SPECIALTY_QUERY_KEYS:
+        escaped_query = re.escape(query_key)
+        escaped_query = escaped_query.replace(r"\ ", r"\s+")
+        escaped_query = escaped_query.replace(r"\-", r"(?:-|\s)")
+
+        regex = rf"(?<![a-zа-яё0-9]){escaped_query}(?![a-zа-яё0-9])"
+        if re.search(regex, t, flags=re.I):
+            return _SPECIALTY_QUERY_DISPLAY[query_key]
+
+    # 2. Потом только конкретные паттерны, без общих Analyst / Engineer / Manager
+    specific_patterns = [
+        (r"\bfinancial analyst\b", "Financial Analyst"),
+        (r"\bbusiness analyst\b", "Business Analyst"),
+        (r"\bproduct analyst\b", "Product Analyst"),
+        (r"\bdata analyst\b", "Data Analyst"),
+        (r"\bdata scientist\b", "Data Scientist"),
+        (r"\bmachine learning engineer\b", "Machine Learning Engineer"),
+        (r"\bml engineer\b", "ML Engineer"),
+        (r"\bai engineer\b", "AI Engineer"),
+        (r"\bdata engineer\b", "Data Engineer"),
+        (r"\banalytics engineer\b", "Analytics Engineer"),
+        (r"\bbackend engineer\b", "Backend Engineer"),
+        (r"\bbackend developer\b", "Backend Developer"),
+        (r"\bsoftware engineer\b", "Software Engineer"),
+        (r"\bfrontend engineer\b", "Frontend Engineer"),
+        (r"\bfrontend developer\b", "Frontend Developer"),
+        (r"\bfull stack engineer\b", "Full Stack Engineer"),
+        (r"\bfullstack engineer\b", "Fullstack Engineer"),
+        (r"\bdevops engineer\b", "DevOps Engineer"),
+        (r"\bsite reliability engineer\b", "Site Reliability Engineer"),
+        (r"\bsre\b", "Site Reliability Engineer"),
+        (r"\bplatform engineer\b", "Platform Engineer"),
+        (r"\bsecurity engineer\b", "Security Engineer"),
+        (r"\bqa engineer\b", "QA Engineer"),
+        (r"\btest engineer\b", "Test Engineer"),
+        (r"\bsolutions architect\b", "Solutions Architect"),
+        (r"\bdata architect\b", "Data Architect"),
+        (r"\bproduct manager\b", "Product Manager"),
+        (r"\bengineering manager\b", "Engineering Manager"),
+        (r"\bresearch scientist\b", "Research Scientist"),
+        (r"\bresearch engineer\b", "Research Engineer"),
+    ]
+
+    for pat, label in specific_patterns:
+        if re.search(pat, t, flags=re.I):
+            return label
+    return None   
+
+SUSPICIOUS_TITLE_PATTERNS = [
+    r"\b202\d\b",
+    r"\b20\d{2}\b",
+    r"\bsummit\b",
+    r"\bcampaign\b",
+    r"\baccepting applications\b",
+    r"\bprogram\b",
+    r"\bprogramme\b",
+    r"\bcohort\b",
+    r"\bco-op\b",
+    r"\bhackathon\b",
+    r"\bbootcamp\b",
+    r"\bwomen in tech\b",
+    r"\bnext in tech\b",
+    r"\bmonopoly go\b",
+]
+
+def _is_suspicious_title_for_analytics(title: str) -> bool:
+    if _is_missing(title):
+        return True
+
+    t = str(title).lower().strip()
+
+    if len(t) < 3:
+        return True
+
+    if any(re.search(p, t, flags=re.I) for p in SUSPICIOUS_TITLE_PATTERNS):
+        return True
+
+    if re.search(r"^\s*\d+\s*x\b", t):
+        return True
+
+    if re.search(r"\b\d+\s+(openings|positions|roles)\b", t):
+        return True
+
+    return False
 
 # Определяет семейство роли по заголовку вакансии
 def _detect_role_family(title: str) -> str:
@@ -2318,8 +2448,16 @@ def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     df = df[df["title_normalized"].astype(str).str.strip() != ""]
 
     df["specialty"] = df["title"].apply(extract_specialty_from_title)
-    df["specialty_category"] = df["specialty"].apply(lambda x: CATEGORY_MAP.get(x) if not _is_missing(x) else None)
+    df["specialty_category"] = df["specialty"].apply(
+        lambda x: CATEGORY_MAP.get(x) if not _is_missing(x) else None
+    )
+    df["analytics_role"] = df["title"].apply(extract_analytics_role_from_title)
     df["role_family"] = df["title_normalized"].apply(_detect_role_family)
+
+    df["analytics_row_ok"] = (
+        df["analytics_role"].notna()
+        & ~df["title"].apply(_is_suspicious_title_for_analytics)
+    )
 
     if "source" in df.columns and "url" in df.columns:
         mask_bad_himalayas = (
@@ -2382,17 +2520,30 @@ def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     parsed_array_cols = [f"_{col}_parsed" for col in skill_array_cols]
 
     # Объединяет навыки из разных источников строки
-    def _merge_skill_sources(row):
+    def _merge_skill_sources(row: pd.Series) -> list[str]:
         merged = []
-        merged.extend(row.get("_text_skills", []))
+
+        # навыки из текста
+        text_skills = row.get("_text_skills", [])
+        if isinstance(text_skills, list):
+            merged.extend(text_skills)
+
+        # навыки из других массивов
         for col in parsed_array_cols:
             parsed = row.get(col, [])
             if isinstance(parsed, list):
                 merged.extend(parsed)
+
         return list(dict.fromkeys(x for x in merged if str(x).strip()))
 
     df["_merged_skills"] = df.apply(_merge_skill_sources, axis=1)
 
+    # отдельное поле: только то, что вытащили из текста
+    df["skills_extracted"] = df["_text_skills"].apply(
+        lambda s: _to_pg_array(normalize_skills(s))
+    )
+
+    # итоговое поле: объединение text extraction + key_skills + других skill-массивов
     df["skills_normalized"] = df["_merged_skills"].apply(
         lambda s: _to_pg_array(normalize_skills(s))
     )
@@ -2404,20 +2555,18 @@ def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     no_skills = int((df["_skills_count"] == 0).sum())
     if no_skills > 0:
         logger.info(
-            "Keeping %s rows without extracted skills: they will still go to embeddings",
-            no_skills
+            "Keeping %s rows without normalized skills",
+            no_skills,
         )
 
-    drop_cols = (
-        ["_skill_text", "_text_skills", "_merged_skills", "_skills_count"]
-        + parsed_array_cols
-        + [c for c in [
-            "requirements", "responsibilities", "nice_to_have",
-            "key_skills", "skills_extracted", "tech_stack_tags",
-            "tools", "methodologies",
-        ] if c in df.columns]
-    )
+    drop_cols = [
+        "_skill_text",
+        "_text_skills",
+        "_merged_skills",
+        "_skills_count",
+    ]
     df.drop(columns=drop_cols, inplace=True, errors="ignore")
+
 
     df["department"] = df.apply(
         lambda r: normalize_department(
@@ -2452,6 +2601,13 @@ def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
 
         period = _extract_period_hint(txt)
 
+        salary_context_markers = [
+            "salary", "compensation", "pay", "base pay", "base salary",
+            "annual salary", "monthly salary", "hourly rate", "rate",
+            "ote", "per year", "per month", "per hour",
+            "зарплата", "оклад", "оплата", "компенсация", "доход"
+        ]
+
         patterns = [
             rf"(?P<cur1>{CURRENCY_TOKEN_RE})\s*(?P<n1>{SALARY_NUMBER_RE})\s*(?:-|–|—|to)\s*(?P<cur2>{CURRENCY_TOKEN_RE})?\s*(?P<n2>{SALARY_NUMBER_RE})",
             rf"(?P<n1>{SALARY_NUMBER_RE})\s*(?:-|–|—|to)\s*(?P<n2>{SALARY_NUMBER_RE})\s*(?P<cur3>{CURRENCY_TOKEN_RE})",
@@ -2460,36 +2616,38 @@ def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
         ]
 
         for pat in patterns:
-            m = re.search(pat, txt, flags=re.I)
-            if not m:
-                continue
+            for m in re.finditer(pat, txt, flags=re.I):
+                gd = m.groupdict()
+                raw_salary_text = m.group(0)
 
-            gd = m.groupdict()
-            raw_salary_text = m.group(0)
+                start, end = m.span()
+                window = txt[max(0, start - 100): min(len(txt), end + 100)].lower()
 
-            currency = (
-                _currency_from_token(gd.get("cur1"))
-                or _currency_from_token(gd.get("cur2"))
-                or _currency_from_token(gd.get("cur3"))
-                or _currency_from_token(gd.get("cur4"))
-                or _currency_from_token(gd.get("cur5"))
-                or detect_currency_from_text(raw_salary_text)
-                or detect_currency_from_text(txt)
-            )
-            currency = _normalize_currency_code(currency)
+                if not any(marker in window for marker in salary_context_markers):
+                    continue
 
-            if gd.get("n1") and gd.get("n2"):
-                sal_from = _parse_number(gd["n1"])
-                sal_to = _parse_number(gd["n2"])
-                return sal_from, sal_to, currency, period, raw_salary_text
+                currency = (
+                    _currency_from_token(gd.get("cur1"))
+                    or _currency_from_token(gd.get("cur2"))
+                    or _currency_from_token(gd.get("cur3"))
+                    or _currency_from_token(gd.get("cur4"))
+                    or _currency_from_token(gd.get("cur5"))
+                    or detect_currency_from_text(raw_salary_text)
+                )
+                currency = _normalize_currency_code(currency)
 
-            if gd.get("n3"):
-                sal = _parse_number(gd["n3"])
-                return sal, sal, currency, period, raw_salary_text
+                if gd.get("n1") and gd.get("n2"):
+                    sal_from = _parse_number(gd["n1"])
+                    sal_to = _parse_number(gd["n2"])
+                    return sal_from, sal_to, currency, period, raw_salary_text
 
-            if gd.get("n4"):
-                sal = _parse_number(gd["n4"])
-                return sal, sal, currency, period, raw_salary_text
+                if gd.get("n3"):
+                    sal = _parse_number(gd["n3"])
+                    return sal, sal, currency, period, raw_salary_text
+
+                if gd.get("n4"):
+                    sal = _parse_number(gd["n4"])
+                    return sal, sal, currency, period, raw_salary_text
 
         return None, None, None, None, None
 
@@ -2504,10 +2662,9 @@ def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
         salary_text = None
 
         needs_parse = (
-            (pd.isna(sal_from) and pd.isna(sal_to))
-            or (pd.isna(sal_from) != pd.isna(sal_to))
-            or _is_missing(currency)
-        )
+        (pd.isna(sal_from) and pd.isna(sal_to))
+        or (pd.isna(sal_from) != pd.isna(sal_to))
+    )
 
         if needs_parse:
             parsed_from, parsed_to, parsed_cur, parsed_period, parsed_text = extract_salary_from_text_safe(desc)
@@ -2542,6 +2699,19 @@ def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     df["currency"] = salary_fixed["currency"]
     df["salary_text_raw"] = salary_fixed["salary_text_raw"]
 
+    def _salary_mid(row):
+        sf = row.get("salary_from")
+        st = row.get("salary_to")
+
+        if pd.notna(sf) and pd.notna(st):
+            return round((float(sf) + float(st)) / 2.0, 2)
+        if pd.notna(sf):
+            return round(float(sf), 2)
+        if pd.notna(st):
+            return round(float(st), 2)
+        return None
+
+    df["salary_mid_monthly"] = df.apply(_salary_mid, axis=1)
     # Собирает текстовое представление зарплаты
     def _salary_to_text(row) -> str:
         sf = row.get("salary_from")
@@ -2594,8 +2764,7 @@ def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     mask_remote = df["remote_type"] == "remote"
     df.loc[mask_remote, "city"] = None
 
-    if "country_normalized" in df.columns:
-        df.drop(columns=["country_normalized"], inplace=True)
+    df["country_normalized"] = df["country"]
 
     for col in ["_parsed_city", "_parsed_country"]:
         if col in df.columns:
@@ -2714,7 +2883,7 @@ def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     salary_sane = df.apply(_sanitize_salary_range, axis=1)
     df["salary_from"] = salary_sane["salary_from"]
     df["salary_to"] = salary_sane["salary_to"]
-
+    df["salary_mid_monthly"] = df.apply(_salary_mid, axis=1)
     df["salary_from_rub"] = df.apply(
         lambda r: _convert_to_rub(r.get("salary_from"), r.get("currency")), axis=1
     )
@@ -2918,6 +3087,7 @@ QDRANT_COLUMNS = [
     "specialty",
     "specialty_category",
     "role_family",
+    "analytics_role",
     "country",
     "city",
     "remote_type",
@@ -2925,6 +3095,7 @@ QDRANT_COLUMNS = [
     "skills_normalized",
     "salary_from",
     "salary_to",
+    "salary_mid_monthly",
     "currency",
     "salary_from_rub",
     "salary_to_rub",
@@ -2955,12 +3126,20 @@ CLEAN_DATASET_COLUMNS = [
     "seniority_normalized",
     "years_experience_min",
     "years_experience_max",
+    "analytics_role",
+    "analytics_row_ok",
     "salary_from",
     "salary_to",
+    "salary_mid_monthly",
     "currency",
     "salary_from_rub",
     "salary_to_rub",
+    "key_skills",
+    "skills_extracted",
     "skills_normalized",
+    "tech_stack_tags",
+    "tools",
+    "methodologies",
     "spoken_languages",
     "is_data_role",
     "is_ml_role",
@@ -2984,6 +3163,8 @@ FINAL_COLUMN_ORDER = [
     "specialty",
     "specialty_category",
     "role_family",
+    "analytics_role",
+    "analytics_row_ok",
     "location",
     "country",
     "city",
@@ -2995,12 +3176,18 @@ FINAL_COLUMN_ORDER = [
     "years_experience_max",
     "salary_from",
     "salary_to",
+    "salary_mid_monthly",
     "currency",
     "salary_from_rub",
     "salary_to_rub",
     "salary_text",
     "experience_text",
+    "key_skills",
+    "skills_extracted",
     "skills_normalized",
+    "tech_stack_tags",
+    "tools",
+    "methodologies",
     "spoken_languages",
     "posting_language",
     "visa_sponsorship",
@@ -3084,8 +3271,7 @@ def run_clean_step(
         logger.warning("raw_s3_keys not provided; using prefix %s (%s files)", prefix, len(raw_keys))
 
     if not raw_keys:
-        logger.warning("No raw files to clean for %s", date_str)
-        return ""
+        raise ValueError(f"No raw files to clean for {date_str}")
 
     dfs = []
     for key in raw_keys:
@@ -3098,8 +3284,7 @@ def run_clean_step(
             logger.error("Failed to download %s: %s", key, e)
 
     if not dfs:
-        logger.warning("All raw files failed or empty")
-        return ""
+        raise ValueError(f"All raw files failed or were empty for {date_str}")
 
     merged = pd.concat(dfs, ignore_index=True)
     logger.info("Merged raw: %s rows from %s files", len(merged), len(dfs))

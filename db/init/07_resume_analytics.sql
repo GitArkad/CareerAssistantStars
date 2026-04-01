@@ -93,7 +93,7 @@ BEGIN
                 ELSE NULL
             END AS salary_mid
         FROM job_matches jm
-        JOIN jobs_curated jc   ON jc.job_id = jm.job_id
+        JOIN v_jobs_analytics_base jc   ON jc.job_id = jm.job_id
         LEFT JOIN job_total_skills jts ON jts.job_id = jm.job_id
         WHERE (_country IS NULL OR COALESCE(jc.country_normalized, jc.country) = _country)
           AND (_seniority IS NULL OR jc.seniority_normalized = _seniority)
@@ -273,7 +273,7 @@ BEGIN
         ) AS job_skill_fit_pct,
         COALESCE(jms.missing_skills, '{}'::TEXT[]) AS missing_skills
     FROM job_match_detail jmd
-    JOIN jobs_curated jc      ON jc.job_id = jmd.job_id
+    JOIN v_jobs_analytics_base jc      ON jc.job_id = jmd.job_id
     LEFT JOIN job_total_skills jts ON jts.job_id = jmd.job_id
     LEFT JOIN job_missing jms ON jms.job_id = jmd.job_id
     WHERE (_country IS NULL OR COALESCE(jc.country_normalized, jc.country) = _country)
@@ -419,7 +419,7 @@ BEGIN
                     WHEN jc.salary_to   IS NOT NULL THEN jc.salary_to::numeric
                     ELSE NULL
                 END AS salary_mid
-            FROM jobs_curated jc
+            FROM v_jobs_analytics_base jc
             WHERE (_country IS NULL OR COALESCE(jc.country_normalized, jc.country) = _country)
               AND (
                     _role IS NULL
@@ -611,7 +611,7 @@ BEGIN
                         )
                     ELSE NULL
                 END AS salary_mid
-            FROM jobs_curated jc
+            FROM v_jobs_analytics_base jc
             WHERE COALESCE(
                       NULLIF(BTRIM(jc.specialty), ''),
                       NULLIF(BTRIM(jc.title_normalized), ''),
@@ -780,7 +780,7 @@ BEGIN
                         )
                     ELSE NULL
                 END AS salary_mid
-            FROM jobs_curated jc
+            FROM v_jobs_analytics_base jc
             WHERE COALESCE(jc.country_normalized, jc.country) = _country
         ),
         role_stats AS (
@@ -928,7 +928,7 @@ BEGIN
                     unnest(jm2.matched_skills) AS s,
                     COUNT(*) AS cnt
                 FROM job_matches jm2
-                JOIN jobs_curated jc2 ON jc2.job_id = jm2.job_id
+                JOIN v_jobs_analytics_base jc2 ON jc2.job_id = jm2.job_id
                 WHERE COALESCE(jc2.country_normalized, jc2.country)
                     = COALESCE(jc.country_normalized, jc.country)
                 GROUP BY s
@@ -937,7 +937,7 @@ BEGIN
             ) sub
         ) AS top_matched_skills
     FROM job_matches jm
-    JOIN jobs_curated jc ON jc.job_id = jm.job_id
+    JOIN v_jobs_analytics_base jc ON jc.job_id = jm.job_id
     LEFT JOIN job_total_skills jts ON jts.job_id = jm.job_id
     WHERE COALESCE(jc.country_normalized, jc.country) IS NOT NULL
     GROUP BY COALESCE(jc.country_normalized, jc.country)
@@ -1051,7 +1051,7 @@ BEGIN
             1
         ) AS avg_job_fit_pct
     FROM job_matches jm
-    JOIN jobs_curated jc ON jc.job_id = jm.job_id
+    JOIN v_jobs_analytics_base jc ON jc.job_id = jm.job_id
     LEFT JOIN job_total_skills jts ON jts.job_id = jm.job_id
     WHERE (_country IS NULL OR COALESCE(jc.country_normalized, jc.country) = _country)
     GROUP BY
@@ -1070,7 +1070,7 @@ CREATE OR REPLACE VIEW v_available_countries AS
 SELECT
     COALESCE(country_normalized, country) AS country,
     COUNT(*) AS jobs_count
-FROM jobs_curated
+FROM v_jobs_analytics_base
 WHERE COALESCE(country_normalized, country) IS NOT NULL
   AND BTRIM(COALESCE(country_normalized, country)) <> ''
 GROUP BY COALESCE(country_normalized, country)
@@ -1078,26 +1078,17 @@ ORDER BY jobs_count DESC, country;
 
 CREATE OR REPLACE VIEW v_available_roles AS
 SELECT
-    COALESCE(
-        NULLIF(BTRIM(specialty), ''),
-        NULLIF(BTRIM(title_normalized), ''),
-        NULLIF(BTRIM(title), '')
-    ) AS role,
+    COALESCE(NULLIF(BTRIM(role_family), ''), 'other') AS role,
     COUNT(*) AS jobs_count
-FROM jobs_curated
-WHERE COALESCE(
-          NULLIF(BTRIM(specialty), ''),
-          NULLIF(BTRIM(title_normalized), ''),
-          NULLIF(BTRIM(title), '')
-      ) IS NOT NULL
-GROUP BY role
+FROM v_jobs_analytics_base
+GROUP BY COALESCE(NULLIF(BTRIM(role_family), ''), 'other')
 ORDER BY jobs_count DESC, role;
 
 CREATE OR REPLACE VIEW v_available_seniorities AS
 SELECT
     seniority_normalized AS seniority,
     COUNT(*) AS jobs_count
-FROM jobs_curated
+FROM v_jobs_analytics_base
 WHERE seniority_normalized IS NOT NULL
   AND seniority_normalized <> 'unknown'
 GROUP BY seniority_normalized
@@ -1119,13 +1110,124 @@ CREATE OR REPLACE VIEW v_available_skills AS
 SELECT
     sd.canonical_name AS skill_name,
     sd.category,
-    COUNT(js.job_id) AS jobs_count
+    COUNT(DISTINCT js.job_id) AS jobs_count
 FROM skills_dictionary sd
-LEFT JOIN job_skills js ON js.skill_id = sd.skill_id
+LEFT JOIN job_skills js
+       ON js.skill_id = sd.skill_id
+LEFT JOIN v_jobs_analytics_base jb
+       ON jb.job_id = js.job_id
 WHERE sd.is_active = TRUE
+  AND (jb.job_id IS NOT NULL OR js.job_id IS NULL)
 GROUP BY sd.canonical_name, sd.category
 ORDER BY jobs_count DESC, sd.canonical_name;
 
+-- Общая покрываемость данных для Streamlit.
+CREATE OR REPLACE VIEW v_streamlit_data_coverage_overview AS
+WITH skill_jobs AS (
+    SELECT DISTINCT js.job_id
+    FROM job_skills js
+    JOIN v_jobs_analytics_base jb ON jb.job_id = js.job_id
+)
+SELECT
+    COUNT(*) AS total_jobs,
+    COUNT(*) FILTER (
+        WHERE salary_from_rub IS NOT NULL OR salary_to_rub IS NOT NULL
+    ) AS jobs_with_salary,
+    ROUND(
+        100.0 * COUNT(*) FILTER (
+            WHERE salary_from_rub IS NOT NULL OR salary_to_rub IS NOT NULL
+        ) / NULLIF(COUNT(*), 0),
+        1
+    ) AS pct_with_salary,
+    COUNT(*) FILTER (
+        WHERE sj.job_id IS NOT NULL
+    ) AS jobs_with_skills,
+    ROUND(
+        100.0 * COUNT(*) FILTER (
+            WHERE sj.job_id IS NOT NULL
+        ) / NULLIF(COUNT(*), 0),
+        1
+    ) AS pct_with_skills,
+    COUNT(*) FILTER (
+        WHERE (salary_from_rub IS NOT NULL OR salary_to_rub IS NOT NULL)
+          AND sj.job_id IS NOT NULL
+    ) AS jobs_with_salary_and_skills,
+    ROUND(
+        100.0 * COUNT(*) FILTER (
+            WHERE (salary_from_rub IS NOT NULL OR salary_to_rub IS NOT NULL)
+              AND sj.job_id IS NOT NULL
+        ) / NULLIF(COUNT(*), 0),
+        1
+    ) AS pct_with_salary_and_skills,
+    'RUB'::TEXT AS salary_currency
+FROM v_jobs_analytics_base jb
+LEFT JOIN skill_jobs sj ON sj.job_id = jb.job_id;
+
+-- Покрываемость данных по источникам.
+CREATE OR REPLACE VIEW v_streamlit_data_coverage_by_source AS
+WITH skill_jobs AS (
+    SELECT DISTINCT js.job_id
+    FROM job_skills js
+    JOIN v_jobs_analytics_base jb ON jb.job_id = js.job_id
+)
+SELECT
+    jb.source,
+    COUNT(*) AS total_jobs,
+    COUNT(*) FILTER (
+        WHERE jb.salary_from_rub IS NOT NULL OR jb.salary_to_rub IS NOT NULL
+    ) AS jobs_with_salary,
+    ROUND(
+        100.0 * COUNT(*) FILTER (
+            WHERE jb.salary_from_rub IS NOT NULL OR jb.salary_to_rub IS NOT NULL
+        ) / NULLIF(COUNT(*), 0),
+        1
+    ) AS pct_with_salary,
+    COUNT(*) FILTER (
+        WHERE sj.job_id IS NOT NULL
+    ) AS jobs_with_skills,
+    ROUND(
+        100.0 * COUNT(*) FILTER (
+            WHERE sj.job_id IS NOT NULL
+        ) / NULLIF(COUNT(*), 0),
+        1
+    ) AS pct_with_skills,
+    COUNT(*) FILTER (
+        WHERE (jb.salary_from_rub IS NOT NULL OR jb.salary_to_rub IS NOT NULL)
+          AND sj.job_id IS NOT NULL
+    ) AS jobs_with_salary_and_skills,
+    ROUND(
+        100.0 * COUNT(*) FILTER (
+            WHERE (jb.salary_from_rub IS NOT NULL OR jb.salary_to_rub IS NOT NULL)
+              AND sj.job_id IS NOT NULL
+        ) / NULLIF(COUNT(*), 0),
+        1
+    ) AS pct_with_salary_and_skills,
+    'RUB'::TEXT AS salary_currency
+FROM v_jobs_analytics_base jb
+LEFT JOIN skill_jobs sj ON sj.job_id = jb.job_id
+GROUP BY jb.source
+ORDER BY total_jobs DESC, jb.source;
+
+-- Самые частые навыки в активной базе.
+CREATE OR REPLACE VIEW v_streamlit_top_skills AS
+WITH total AS (
+    SELECT COUNT(*)::numeric AS total_jobs
+    FROM v_jobs_analytics_base
+)
+SELECT
+    sd.canonical_name AS skill_name,
+    sd.category,
+    COUNT(DISTINCT js.job_id) AS jobs_count,
+    ROUND(
+        100.0 * COUNT(DISTINCT js.job_id)::numeric
+        / NULLIF((SELECT total_jobs FROM total), 0),
+        1
+    ) AS pct_of_jobs
+FROM job_skills js
+JOIN v_jobs_analytics_base jb ON jb.job_id = js.job_id
+JOIN skills_dictionary sd ON sd.skill_id = js.skill_id
+GROUP BY sd.canonical_name, sd.category
+ORDER BY jobs_count DESC, sd.canonical_name;
 
 -- Индексы для аналитики.
 CREATE INDEX IF NOT EXISTS idx_skills_dictionary_lower_name

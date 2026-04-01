@@ -1,6 +1,13 @@
 BEGIN;
 
--- Агрегаты зарплат по роли, стране, seniority, remote и валюте
+-- v2-аналитика для Streamlit.
+-- ВАЖНО:
+-- 1) Основная аналитика агрегируется по role_family, а не по specialty.
+-- 2) Все зарплатные метрики в v2 считаются в RUB.
+-- 3) Для market_role_stats_v2 и market_skill_stats_v2 используются только группы
+--    с достаточным объёмом данных, чтобы не плодить шум из sample_size=5.
+
+-- Агрегаты зарплат по role_family, стране, seniority и remote.
 CREATE TABLE IF NOT EXISTS salary_aggregates_v2 (
     role TEXT NOT NULL,
     country TEXT NOT NULL,
@@ -24,8 +31,8 @@ CREATE INDEX IF NOT EXISTS idx_salary_aggregates_v2_role_country
 CREATE INDEX IF NOT EXISTS idx_salary_aggregates_v2_currency
     ON salary_aggregates_v2 (currency);
 
-
--- Сводная статистика по рынку для каждой группы вакансий
+-- Сводная статистика по рынку для каждой группы вакансий.
+-- median_salary / avg_salary в RUB.
 CREATE TABLE IF NOT EXISTS market_role_stats_v2 (
     role TEXT NOT NULL,
     country TEXT NOT NULL,
@@ -44,8 +51,8 @@ CREATE TABLE IF NOT EXISTS market_role_stats_v2 (
 CREATE INDEX IF NOT EXISTS idx_market_role_stats_v2_role_country
     ON market_role_stats_v2 (role, country, seniority);
 
-
--- Статистика по навыкам внутри каждой группы вакансий
+-- Статистика по навыкам внутри каждой группы вакансий.
+-- salary_* поля в RUB.
 CREATE TABLE IF NOT EXISTS market_skill_stats_v2 (
     role TEXT NOT NULL,
     country TEXT NOT NULL,
@@ -70,10 +77,53 @@ CREATE INDEX IF NOT EXISTS idx_market_skill_stats_v2_skill_id
 CREATE INDEX IF NOT EXISTS idx_market_skill_stats_v2_role_country
     ON market_skill_stats_v2 (role, country, seniority);
 
-
--- Полный пересчёт агрегатов зарплат
+-- Полный пересчёт агрегатов зарплат.
 TRUNCATE TABLE salary_aggregates_v2;
 
+WITH base AS (
+    SELECT
+        COALESCE(NULLIF(BTRIM(role_family), ''), 'other') AS role,
+        COALESCE(NULLIF(BTRIM(COALESCE(country_normalized, country)), ''), 'unknown') AS country,
+        COALESCE(NULLIF(BTRIM(seniority_normalized), ''), 'unknown') AS seniority,
+        COALESCE(remote, remote_type IN ('remote', 'hybrid')) AS is_remote,
+        CASE
+            WHEN salary_from_rub IS NOT NULL AND salary_to_rub IS NOT NULL THEN (salary_from_rub + salary_to_rub) / 2.0
+            WHEN salary_from_rub IS NOT NULL THEN salary_from_rub::numeric
+            WHEN salary_to_rub IS NOT NULL THEN salary_to_rub::numeric
+            WHEN salary_from IS NOT NULL AND salary_to IS NOT NULL THEN
+                (
+                    convert_salary(
+                        salary_from::numeric,
+                        currency,
+                        'RUB',
+                        COALESCE(published_at::date, parsed_at::date, CURRENT_DATE)
+                    )
+                    +
+                    convert_salary(
+                        salary_to::numeric,
+                        currency,
+                        'RUB',
+                        COALESCE(published_at::date, parsed_at::date, CURRENT_DATE)
+                    )
+                ) / 2.0
+            WHEN salary_from IS NOT NULL THEN
+                convert_salary(
+                    salary_from::numeric,
+                    currency,
+                    'RUB',
+                    COALESCE(published_at::date, parsed_at::date, CURRENT_DATE)
+                )
+            WHEN salary_to IS NOT NULL THEN
+                convert_salary(
+                    salary_to::numeric,
+                    currency,
+                    'RUB',
+                    COALESCE(published_at::date, parsed_at::date, CURRENT_DATE)
+                )
+            ELSE NULL
+        END AS salary_mid_rub
+    FROM v_jobs_analytics_base
+)
 INSERT INTO salary_aggregates_v2 (
     role,
     country,
@@ -88,55 +138,70 @@ INSERT INTO salary_aggregates_v2 (
     updated_at
 )
 SELECT
-    COALESCE(NULLIF(BTRIM(specialty), ''), NULLIF(BTRIM(title_normalized), ''), NULLIF(BTRIM(title), ''), 'unknown') AS role,
-    COALESCE(NULLIF(BTRIM(country), ''), 'unknown') AS country,
-    COALESCE(NULLIF(BTRIM(seniority_normalized), ''), 'unknown') AS seniority,
-    COALESCE(remote, remote_type IN ('remote', 'hybrid')) AS is_remote,
-    COALESCE(NULLIF(BTRIM(currency), ''), 'unknown') AS currency,
+    role,
+    country,
+    seniority,
+    is_remote,
+    'RUB' AS currency,
     COUNT(*) AS sample_size,
-    PERCENTILE_CONT(0.25) WITHIN GROUP (ORDER BY salary_midpoint) AS p25,
-    PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY salary_midpoint) AS p50,
-    PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY salary_midpoint) AS p75,
-    AVG(salary_midpoint) AS avg_salary,
+    PERCENTILE_CONT(0.25) WITHIN GROUP (ORDER BY salary_mid_rub) AS p25,
+    PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY salary_mid_rub) AS p50,
+    PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY salary_mid_rub) AS p75,
+    ROUND(AVG(salary_mid_rub), 2) AS avg_salary,
     NOW() AS updated_at
-FROM (
-    SELECT
-        specialty,
-        title_normalized,
-        title,
-        country,
-        seniority_normalized,
-        remote,
-        remote_type,
-        currency,
-        CASE
-            WHEN salary_from IS NOT NULL AND salary_to IS NOT NULL THEN (salary_from + salary_to) / 2.0
-            WHEN salary_from IS NOT NULL THEN salary_from
-            WHEN salary_to IS NOT NULL THEN salary_to
-            ELSE NULL
-        END AS salary_midpoint
-    FROM jobs_curated
-) t
-WHERE salary_midpoint IS NOT NULL
-GROUP BY 1,2,3,4,5;
+FROM base
+WHERE salary_mid_rub IS NOT NULL
+  AND salary_mid_rub > 0
+GROUP BY role, country, seniority, is_remote
+HAVING COUNT(*) >= 10;
 
--- Полный пересчёт общей статистики по ролям
+-- Полный пересчёт общей статистики по ролям.
 TRUNCATE TABLE market_role_stats_v2;
 
 WITH base AS (
     SELECT
-        COALESCE(NULLIF(BTRIM(specialty), ''), NULLIF(BTRIM(title_normalized), ''), NULLIF(BTRIM(title), ''), 'unknown') AS role,
-        COALESCE(NULLIF(BTRIM(country), ''), 'unknown') AS country,
+        COALESCE(NULLIF(BTRIM(role_family), ''), 'other') AS role,
+        COALESCE(NULLIF(BTRIM(COALESCE(country_normalized, country)), ''), 'unknown') AS country,
         COALESCE(NULLIF(BTRIM(seniority_normalized), ''), 'unknown') AS seniority,
         COALESCE(remote, remote_type IN ('remote', 'hybrid')) AS is_remote,
         CASE
-            WHEN salary_from IS NOT NULL AND salary_to IS NOT NULL THEN (salary_from + salary_to) / 2.0
-            WHEN salary_from IS NOT NULL THEN salary_from
-            WHEN salary_to IS NOT NULL THEN salary_to
+            WHEN salary_from_rub IS NOT NULL AND salary_to_rub IS NOT NULL THEN (salary_from_rub + salary_to_rub) / 2.0
+            WHEN salary_from_rub IS NOT NULL THEN salary_from_rub::numeric
+            WHEN salary_to_rub IS NOT NULL THEN salary_to_rub::numeric
+            WHEN salary_from IS NOT NULL AND salary_to IS NOT NULL THEN
+                (
+                    convert_salary(
+                        salary_from::numeric,
+                        currency,
+                        'RUB',
+                        COALESCE(published_at::date, parsed_at::date, CURRENT_DATE)
+                    )
+                    +
+                    convert_salary(
+                        salary_to::numeric,
+                        currency,
+                        'RUB',
+                        COALESCE(published_at::date, parsed_at::date, CURRENT_DATE)
+                    )
+                ) / 2.0
+            WHEN salary_from IS NOT NULL THEN
+                convert_salary(
+                    salary_from::numeric,
+                    currency,
+                    'RUB',
+                    COALESCE(published_at::date, parsed_at::date, CURRENT_DATE)
+                )
+            WHEN salary_to IS NOT NULL THEN
+                convert_salary(
+                    salary_to::numeric,
+                    currency,
+                    'RUB',
+                    COALESCE(published_at::date, parsed_at::date, CURRENT_DATE)
+                )
             ELSE NULL
-        END AS salary_midpoint,
+        END AS salary_mid_rub,
         COALESCE(years_experience_min, years_experience_max, 1) AS years_exp_proxy
-    FROM jobs_curated
+    FROM v_jobs_analytics_base
 )
 INSERT INTO market_role_stats_v2 (
     role,
@@ -155,30 +220,61 @@ SELECT
     seniority,
     is_remote,
     COUNT(*) AS jobs_count,
-    PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY salary_midpoint) AS median_salary,
-    AVG(salary_midpoint) AS avg_salary,
+    PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY salary_mid_rub) AS median_salary,
+    ROUND(AVG(salary_mid_rub), 2) AS avg_salary,
     ROUND(COUNT(*)::numeric / GREATEST(AVG(NULLIF(years_exp_proxy, 0)), 1), 2) AS competition_proxy,
     NOW() AS updated_at
 FROM base
-GROUP BY role, country, seniority, is_remote;
+GROUP BY role, country, seniority, is_remote
+HAVING COUNT(*) >= 20;
 
--- Полный пересчёт статистики по навыкам
+-- Полный пересчёт статистики по навыкам.
 TRUNCATE TABLE market_skill_stats_v2;
 
 WITH base_jobs AS (
     SELECT
         jc.job_id,
-        COALESCE(NULLIF(BTRIM(jc.specialty), ''), NULLIF(BTRIM(jc.title_normalized), ''), NULLIF(BTRIM(jc.title), ''), 'unknown') AS role,
-        COALESCE(NULLIF(BTRIM(jc.country), ''), 'unknown') AS country,
+        COALESCE(NULLIF(BTRIM(jc.role_family), ''), 'other') AS role,
+        COALESCE(NULLIF(BTRIM(COALESCE(jc.country_normalized, jc.country)), ''), 'unknown') AS country,
         COALESCE(NULLIF(BTRIM(jc.seniority_normalized), ''), 'unknown') AS seniority,
         COALESCE(jc.remote, jc.remote_type IN ('remote', 'hybrid')) AS is_remote,
         CASE
-            WHEN jc.salary_from IS NOT NULL AND jc.salary_to IS NOT NULL THEN (jc.salary_from + jc.salary_to) / 2.0
-            WHEN jc.salary_from IS NOT NULL THEN jc.salary_from
-            WHEN jc.salary_to IS NOT NULL THEN jc.salary_to
+            WHEN jc.salary_from_rub IS NOT NULL AND jc.salary_to_rub IS NOT NULL THEN (jc.salary_from_rub + jc.salary_to_rub) / 2.0
+            WHEN jc.salary_from_rub IS NOT NULL THEN jc.salary_from_rub::numeric
+            WHEN jc.salary_to_rub IS NOT NULL THEN jc.salary_to_rub::numeric
+            WHEN jc.salary_from IS NOT NULL AND jc.salary_to IS NOT NULL THEN
+                (
+                    convert_salary(
+                        jc.salary_from::numeric,
+                        jc.currency,
+                        'RUB',
+                        COALESCE(jc.published_at::date, jc.parsed_at::date, CURRENT_DATE)
+                    )
+                    +
+                    convert_salary(
+                        jc.salary_to::numeric,
+                        jc.currency,
+                        'RUB',
+                        COALESCE(jc.published_at::date, jc.parsed_at::date, CURRENT_DATE)
+                    )
+                ) / 2.0
+            WHEN jc.salary_from IS NOT NULL THEN
+                convert_salary(
+                    jc.salary_from::numeric,
+                    jc.currency,
+                    'RUB',
+                    COALESCE(jc.published_at::date, jc.parsed_at::date, CURRENT_DATE)
+                )
+            WHEN jc.salary_to IS NOT NULL THEN
+                convert_salary(
+                    jc.salary_to::numeric,
+                    jc.currency,
+                    'RUB',
+                    COALESCE(jc.published_at::date, jc.parsed_at::date, CURRENT_DATE)
+                )
             ELSE NULL
-        END AS salary_midpoint
-    FROM jobs_curated jc
+        END AS salary_mid_rub
+    FROM v_jobs_analytics_base jc
 ),
 market_slices AS (
     SELECT
@@ -189,19 +285,25 @@ market_slices AS (
         COUNT(*) AS jobs_total
     FROM base_jobs
     GROUP BY role, country, seniority, is_remote
+    HAVING COUNT(*) >= 20
 ),
 jobs_with_skills AS (
-    SELECT
+    SELECT DISTINCT
         bj.role,
         bj.country,
         bj.seniority,
         bj.is_remote,
         js.skill_id,
         bj.job_id,
-        bj.salary_midpoint
+        bj.salary_mid_rub
     FROM base_jobs bj
+    JOIN market_slices ms
+      ON ms.role = bj.role
+     AND ms.country = bj.country
+     AND ms.seniority = bj.seniority
+     AND ms.is_remote = bj.is_remote
     JOIN job_skills js
-        ON js.job_id = bj.job_id
+      ON js.job_id = bj.job_id
 ),
 with_skill AS (
     SELECT
@@ -211,9 +313,10 @@ with_skill AS (
         is_remote,
         skill_id,
         COUNT(DISTINCT job_id) AS jobs_with_skill,
-        PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY salary_midpoint) AS salary_median_with_skill
+        PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY salary_mid_rub) AS salary_median_with_skill
     FROM jobs_with_skills
     GROUP BY role, country, seniority, is_remote, skill_id
+    HAVING COUNT(DISTINCT job_id) >= 3
 ),
 without_skill AS (
     SELECT
@@ -222,16 +325,21 @@ without_skill AS (
         bj.seniority,
         bj.is_remote,
         s.skill_id,
-        PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY bj.salary_midpoint) AS salary_median_without_skill
+        PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY bj.salary_mid_rub) AS salary_median_without_skill
     FROM base_jobs bj
     JOIN (
         SELECT DISTINCT role, country, seniority, is_remote, skill_id
-        FROM jobs_with_skills
+        FROM with_skill
     ) s
       ON s.role = bj.role
      AND s.country = bj.country
      AND s.seniority = bj.seniority
      AND s.is_remote = bj.is_remote
+    JOIN market_slices ms
+      ON ms.role = bj.role
+     AND ms.country = bj.country
+     AND ms.seniority = bj.seniority
+     AND ms.is_remote = bj.is_remote
     WHERE NOT EXISTS (
         SELECT 1
         FROM job_skills js

@@ -100,7 +100,10 @@ CURATED_COLUMNS: list[str] = [
     "security_clearance",
     "specialty",
     "specialty_category",
+    "analytics_role",
+    "analytics_row_ok",
     "salary_text",
+    "salary_mid_monthly",
     "experience_text",
     "posting_language",
     "role_family",
@@ -536,6 +539,11 @@ def _normalize_curated_record(record: dict[str, Any]) -> dict[str, Any]:
         "security_clearance": _to_text(record.get("security_clearance")),
         "specialty": _to_text(record.get("specialty")),
         "specialty_category": _to_text(record.get("specialty_category")),
+        "analytics_role": _to_text(record.get("analytics_role")),
+        "analytics_row_ok": _to_bool(record.get("analytics_row_ok"), default=False),
+        "salary_text": _to_text(record.get("salary_text")),
+        "salary_mid_monthly": _to_float(record.get("salary_mid_monthly")),
+        "experience_text": _to_text(record.get("experience_text")),
         "salary_text": _to_text(record.get("salary_text")),
         "experience_text": _to_text(record.get("experience_text")),
         "posting_language": _to_text(record.get("posting_language")),
@@ -735,16 +743,50 @@ def upsert_job_registry(conn, curated_records: Sequence[dict[str, Any]]) -> None
                         cur.execute("ROLLBACK TO SAVEPOINT job_registry_row")
                 cur.execute("RELEASE SAVEPOINT job_registry_batch")
 
+
+def deactivate_missing_jobs_for_sources(
+    conn,
+    *,
+    run_id: str,
+    sources: Sequence[str],
+) -> int:
+    """
+    Выключает вакансии как архивные, если источник участвовал в текущем запуске,
+    но конкретная вакансия в этом запуске больше не встретилась.
+    """
+    sources = [s for s in sources if s]
+    if not run_id or not sources:
+        return 0
+
+    sql = """
+        UPDATE job_registry
+        SET is_active = FALSE,
+            updated_at = NOW()
+        WHERE source = ANY(%s)
+          AND is_active = TRUE
+          AND COALESCE(last_seen_run_id, '') <> %s
+    """
+    with conn.cursor() as cur:
+        cur.execute(sql, (list(sources), run_id))
+        return cur.rowcount
+
 # Upsert нормализованных вакансий в jobs_curated
-def upsert_curated_jobs(conn, curated_records: Sequence[dict[str, Any]]) -> CuratedLoadResult:
+def upsert_curated_jobs(
+    conn,
+    curated_records: Sequence[dict[str, Any]],
+    already_normalized: bool = False,
+) -> CuratedLoadResult:
     normalized: list[dict[str, Any]] = []
     failed = 0
 
-    for record in curated_records:
-        try:
-            normalized.append(_normalize_curated_record(record))
-        except Exception:
-            failed += 1
+    if already_normalized:
+        normalized = list(curated_records)
+    else:
+        for record in curated_records:
+            try:
+                normalized.append(_normalize_curated_record(record))
+            except Exception:
+                failed += 1
 
     if not normalized:
         return CuratedLoadResult(
@@ -756,8 +798,19 @@ def upsert_curated_jobs(conn, curated_records: Sequence[dict[str, Any]]) -> Cura
     update_assignments = [
         f"{column} = EXCLUDED.{column}"
         for column in CURATED_COLUMNS
-        if column != "job_id"
-    ] + ["updated_at = NOW()"]
+        if column not in {"job_id", "embedding_status"}
+    ]
+
+    update_assignments += [
+        """
+        embedding_status = CASE
+            WHEN jobs_curated.content_hash IS DISTINCT FROM EXCLUDED.content_hash
+                THEN 'pending'
+            ELSE jobs_curated.embedding_status
+        END
+        """,
+        "updated_at = NOW()",
+    ]
 
     sql = f"""
         INSERT INTO jobs_curated ({', '.join(CURATED_COLUMNS)})
@@ -766,6 +819,7 @@ def upsert_curated_jobs(conn, curated_records: Sequence[dict[str, Any]]) -> Cura
         DO UPDATE SET
             {', '.join(update_assignments)};
     """
+
 
     accepted_records: list[dict[str, Any]] = []
 
@@ -821,7 +875,7 @@ def insert_job_audit_rows(
             if old_hash is None:
                 action = "inserted"
             elif old_hash == new_hash:
-                action = "unchanged"
+                continue
             else:
                 action = "updated"
 
@@ -924,10 +978,21 @@ def run_db_load(
                 [record["job_id"] for record in normalized_curated],
             )
 
+            registry_sources = sorted({record.get("source") for record in normalized_curated if record.get("source")})
+            current_run_id = next(
+                (record.get("run_id") for record in normalized_curated if record.get("run_id")),
+                None,
+            )
+
             # Обновляем текущий реестр вакансий.
             upsert_job_registry(conn, normalized_curated)
-            curated_result = upsert_curated_jobs(conn, normalized_curated)
+            curated_result = upsert_curated_jobs(conn, normalized_curated, already_normalized=True)
             audit_result = insert_job_audit_rows(conn, normalized_curated, existing_curated_state)
+            archived_count = deactivate_missing_jobs_for_sources(
+                conn,
+                run_id=current_run_id or "",
+                sources=registry_sources,
+            )
 
             unchanged = sum(
                 1
@@ -954,6 +1019,7 @@ def run_db_load(
                 "manifest": manifest_result.__dict__,
                 "curated": curated_result.__dict__,
                 "audit": audit_result.__dict__,
+                "archived_count": archived_count,
             }
 
         except Exception as exc:

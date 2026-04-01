@@ -751,11 +751,6 @@ class HHParser(QueryParserBase):
                 if len(res) >= target:
                     break
 
-                sal = j.get("salary") or {}
-                req = self._sd(j.get("snippet")).get("requirement")
-                resp = self._sd(j.get("snippet")).get("responsibility")
-                desc = " ".join(x for x in [req, resp] if x)
-                y1, y2 = _yrs(desc)
                 addr = self._sd(j.get("address"))
                 area = self._sd(j.get("area"))
 
@@ -764,30 +759,14 @@ class HHParser(QueryParserBase):
                 else:
                     country = _infer_hh_country(area, addr)
 
-                schedule_id = ((j.get("schedule", {}) or {}).get("id") or "").lower()
-                is_remote = "remote" in schedule_id
+                detail = None
+                if self.detail_fetch_limit == 0 or self._detail_fetch_count < self.detail_fetch_limit:
+                    detail = self._det(j.get("id"))
 
-                res.append(
-                    self._rec(
-                        source_job_id=str(j.get("id") or ""),
-                        title=j.get("name"),
-                        description=desc,
-                        company_name=self._sd(j.get("employer")).get("name"),
-                        salary_from=sal.get("from"),
-                        salary_to=sal.get("to"),
-                        currency=sal.get("currency"),
-                        location=(addr.get("city") or addr.get("raw") or area.get("name")),
-                        country=country,
-                        remote=is_remote,
-                        remote_type="remote" if is_remote else "office",
-                        published_at=j.get("published_at"),
-                        url=j.get("alternate_url"),
-                        search_query=keyword,
-                        years_min=y1,
-                        years_max=y2,
-                        raw_json=j,
-                    )
-)
+                if detail:
+                    j = detail
+
+                res.append(self._p(j, keyword, country))
 
             pages = data.get("pages", 0)
             page += 1

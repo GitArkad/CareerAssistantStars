@@ -135,8 +135,6 @@ def _prepare_record_dict(row: pd.Series) -> dict[str, Any]:
         if bool_col in d:
             d[bool_col] = _normalize_bool(d.get(bool_col), default=False)
 
-    if not d.get("embedding_status"):
-        d["embedding_status"] = "pending"
     if not d.get("role_family"):
         d["role_family"] = "other"
     if not d.get("seniority_normalized"):
@@ -163,18 +161,69 @@ def _extract_raw_key_parts(raw_s3_key: str) -> tuple[Optional[str], Optional[str
     return None, None, None
 
 # Построение стабильного content_hash
+def _stable_hash_value(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, float) and pd.isna(value):
+        return ""
+    if isinstance(value, (list, tuple, set)):
+        clean = sorted(str(x).strip() for x in value if str(x).strip())
+        return json.dumps(clean, ensure_ascii=False, sort_keys=True)
+    if isinstance(value, dict):
+        return json.dumps(value, ensure_ascii=False, sort_keys=True)
+    return str(value).strip()
+
+
 def _build_content_hash(d: dict[str, Any]) -> str:
-    stable = "|".join(
-        [
-            str(d.get("job_id") or ""),
-            str(d.get("source") or ""),
-            str(d.get("source_job_id") or ""),
-            str(d.get("url") or ""),
-            str(d.get("title") or ""),
-            str(d.get("company_name") or ""),
-        ]
+    stable_payload = {
+        "source": _stable_hash_value(d.get("source")),
+        "source_job_id": _stable_hash_value(d.get("source_job_id")),
+        "url": _stable_hash_value(d.get("url")),
+        "title": _stable_hash_value(d.get("title")),
+        "title_normalized": _stable_hash_value(d.get("title_normalized")),
+        "description": _stable_hash_value(d.get("description")),
+        "requirements": _stable_hash_value(d.get("requirements")),
+        "responsibilities": _stable_hash_value(d.get("responsibilities")),
+        "nice_to_have": _stable_hash_value(d.get("nice_to_have")),
+        "company_name": _stable_hash_value(d.get("company_name")),
+        "department": _stable_hash_value(d.get("department")),
+        "salary_from": _stable_hash_value(d.get("salary_from")),
+        "salary_to": _stable_hash_value(d.get("salary_to")),
+        "currency": _stable_hash_value(d.get("currency")),
+        "salary_period": _stable_hash_value(d.get("salary_period")),
+        "seniority_normalized": _stable_hash_value(d.get("seniority_normalized")),
+        "years_experience_min": _stable_hash_value(d.get("years_experience_min")),
+        "years_experience_max": _stable_hash_value(d.get("years_experience_max")),
+        "location": _stable_hash_value(d.get("location")),
+        "country": _stable_hash_value(d.get("country")),
+        "country_normalized": _stable_hash_value(d.get("country_normalized")),
+        "region": _stable_hash_value(d.get("region")),
+        "city": _stable_hash_value(d.get("city")),
+        "remote": _stable_hash_value(d.get("remote")),
+        "remote_type": _stable_hash_value(d.get("remote_type")),
+        "employment_type": _stable_hash_value(d.get("employment_type")),
+        "specialty": _stable_hash_value(d.get("specialty")),
+        "specialty_category": _stable_hash_value(d.get("specialty_category")),
+        "role_family": _stable_hash_value(d.get("role_family")),
+        "posting_language": _stable_hash_value(d.get("posting_language")),
+        "visa_sponsorship": _stable_hash_value(d.get("visa_sponsorship")),
+        "relocation": _stable_hash_value(d.get("relocation")),
+        "key_skills": _stable_hash_value(d.get("key_skills")),
+        "skills_extracted": _stable_hash_value(d.get("skills_extracted")),
+        "skills_normalized": _stable_hash_value(d.get("skills_normalized")),
+        "tech_stack_tags": _stable_hash_value(d.get("tech_stack_tags")),
+        "tools": _stable_hash_value(d.get("tools")),
+        "methodologies": _stable_hash_value(d.get("methodologies")),
+        "spoken_languages": _stable_hash_value(d.get("spoken_languages")),
+    }
+
+    payload_json = json.dumps(
+        stable_payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
     )
-    return hashlib.sha1(stable.encode("utf-8")).hexdigest()
+    return hashlib.sha1(payload_json.encode("utf-8")).hexdigest()
 
 # Построение стабильного content_hash
 def _build_raw_s3_key(date_part: Optional[str], run_part: Optional[str], source: Any) -> Optional[str]:
@@ -286,6 +335,60 @@ def df_to_curated_records(
 
     return records
 
+def apply_official_rub_rates_for_run(run_id: Optional[str]) -> int:
+    if not run_id:
+        return 0
+
+    from src.loaders.db_loader import get_connection
+
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE jobs_curated jc
+                SET
+                    salary_from_rub = CASE
+                        WHEN jc.salary_from IS NOT NULL AND jc.currency IS NOT NULL THEN
+                            COALESCE(
+                                ROUND(
+                                    convert_salary(
+                                        jc.salary_from::numeric,
+                                        jc.currency,
+                                        'RUB',
+                                        COALESCE(jc.published_at::date, jc.parsed_at::date, CURRENT_DATE)
+                                    )
+                                )::bigint,
+                                jc.salary_from_rub
+                            )
+                        ELSE NULL
+                    END,
+                    salary_to_rub = CASE
+                        WHEN jc.salary_to IS NOT NULL AND jc.currency IS NOT NULL THEN
+                            COALESCE(
+                                ROUND(
+                                    convert_salary(
+                                        jc.salary_to::numeric,
+                                        jc.currency,
+                                        'RUB',
+                                        COALESCE(jc.published_at::date, jc.parsed_at::date, CURRENT_DATE)
+                                    )
+                                )::bigint,
+                                jc.salary_to_rub
+                            )
+                        ELSE NULL
+                    END,
+                    updated_at = NOW()
+                WHERE jc.run_id = %s
+                """,
+                (run_id,),
+            )
+            affected = cur.rowcount
+        conn.commit()
+
+    logger.info("Official FX repricing done for run_id=%s, rows=%s", run_id, affected)
+    return affected
+
+
 # Преобразование DataFrame в curated records
 def resolve_clean_s3_key(date_str: Optional[str] = None, clean_s3_key: Optional[str] = None) -> str:
     from src.loaders.s3_storage import key_exists, latest_clean_key, list_keys
@@ -342,10 +445,18 @@ def run_load_step(
         source="multi-source",
         manage_etl_run=True,
     )
+
+    run_id = next((r.get("run_id") for r in curated_records if r.get("run_id")), None)
+    repriced_rows = apply_official_rub_rates_for_run(run_id)
+
     summary["clean_s3_key"] = key
     summary["manifest_record_count"] = len(manifest_records)
+    summary["salary_repriced_with_official_fx"] = repriced_rows
+
     logger.info("DB load completed: %s", summary)
     return summary
+
+
 
 # Локальный запуск для проверки
 if __name__ == "__main__":

@@ -273,7 +273,7 @@ def _build_metadata(job: Dict) -> Dict[str, Any]:
         "company": job.get("company_name") or job.get("company"),
         "grade": grade,
         "skills": skills,
-        "country": job.get("country"),
+        "country": (str(job.get("country") or "").strip().upper() or None),
         "city": job.get("city"),
         "work_format": work_format,
         "experience_years": experience_years,
@@ -310,6 +310,7 @@ def load_vacancies_to_qdrant(date_str: str = None, batch_size: int = BATCH_SIZE)
     loaded = 0
     failed = 0
     done_ids: list[str] = []
+    failed_ids: list[str] = []
 
     with get_connection() as conn:
         with conn.cursor() as cur:
@@ -371,6 +372,7 @@ def load_vacancies_to_qdrant(date_str: str = None, batch_size: int = BATCH_SIZE)
                 except Exception as e:
                     logger.exception("Batch %s failed: %s", i // batch_size + 1, e)
                     failed += len(batch)
+                    failed_ids.extend(job["job_id"] for job in batch)
 
             if done_ids:
                 cur.execute(
@@ -380,6 +382,16 @@ def load_vacancies_to_qdrant(date_str: str = None, batch_size: int = BATCH_SIZE)
                     WHERE job_id = ANY(%s)
                     """,
                     (done_ids,),
+                )
+
+            if failed_ids:
+                cur.execute(
+                    """
+                    UPDATE jobs_curated
+                    SET embedding_status = 'failed', updated_at = NOW()
+                    WHERE job_id = ANY(%s)
+                    """,
+                    (failed_ids,),
                 )
 
         conn.commit()
@@ -564,57 +576,140 @@ def search_similar(
 
 # Поиск вакансий, похожих на существующую вакансию.
 def search_similar_to_job(
-    company: str,
-    title: str,
+    company: str = None,
+    title: str = None,
+    job_id: str = None,
     limit: int = 20,
     exclude_same_company: bool = True,
 ) -> List[Dict]:
     """Find jobs similar to an existing vacancy."""
     client = get_client()
-    point_id = _det_uuid({"company_name": company, "title": title})
 
-    try:
-        points = client.retrieve(
-            collection_name=COLLECTION_NAME,
-            ids=[point_id],
-            with_vectors=True,
-        )
-        if not points:
-            return []
-
-        vector = points[0].vector
-        comp = points[0].payload.get("company")
-
-        qf = None
-        if exclude_same_company and comp:
-            qf = models.Filter(must_not=[
+    company_filter = None
+    if exclude_same_company and company:
+        company_filter = models.Filter(
+            must_not=[
                 models.FieldCondition(
                     key="company",
-                    match=models.MatchValue(value=comp),
+                    match=models.MatchValue(value=company),
                 )
-            ])
+            ]
+        )
 
-        hits = client.search(
+    # 1) Сначала пытаемся найти точку по job_id
+    if job_id:
+        try:
+            point_id = _det_uuid({"job_id": job_id})
+            points = client.retrieve(
+                collection_name=COLLECTION_NAME,
+                ids=[point_id],
+                with_vectors=True,
+            )
+            if points:
+                vector = points[0].vector
+                comp = points[0].payload.get("company") or company
+
+                qf = None
+                if exclude_same_company and comp:
+                    qf = models.Filter(
+                        must_not=[
+                            models.FieldCondition(
+                                key="company",
+                                match=models.MatchValue(value=comp),
+                            )
+                        ]
+                    )
+
+                hits = client.search(
+                    collection_name=COLLECTION_NAME,
+                    query_vector=vector,
+                    query_filter=qf,
+                    limit=limit,
+                )
+                return [{**h.payload, "score": round(h.score, 4)} for h in hits]
+        except Exception as e:
+            logger.warning("search_similar_to_job vector path failed: %s", e)
+
+    # 2) Фоллбек: semantic query по title/company
+    if not title and not company:
+        return []
+
+    query_text = f"query: {(title or '').strip()} at {(company or '').strip()}".strip()
+    try:
+        hits = client.query(
             collection_name=COLLECTION_NAME,
-            query_vector=vector,
-            query_filter=qf,
+            query_text=query_text,
+            query_filter=company_filter,
             limit=limit,
         )
         return [
-            {**h.payload, "score": round(h.score, 4)}
-            for h in hits
+            {**hit.metadata, "score": round(hit.score, 4) if hasattr(hit, "score") else None}
+            for hit in hits
         ]
-
     except Exception as e:
-        logger.error(f"search_similar_to_job: {e}")
+        logger.error("search_similar_to_job: %s", e)
         return []
 
 
+# Удаление архивных вакансий из Qdrant
+def delete_inactive_jobs_from_qdrant(limit: int = 5000) -> Dict[str, int]:
+    from src.loaders.db_loader import get_connection
+
+    client = get_client()
+
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT jc.job_id
+                FROM jobs_curated jc
+                JOIN job_registry jr ON jr.job_id = jc.job_id
+                WHERE jr.is_active = FALSE
+                  AND jc.embedding_status = 'created'
+                LIMIT %s
+                """,
+                (limit,),
+            )
+            rows = cur.fetchall()
+
+            if not rows:
+                return {"deleted": 0}
+
+            job_ids = [row[0] for row in rows]
+            point_ids = [_det_uuid({"job_id": job_id}) for job_id in job_ids]
+
+            client.delete(
+                collection_name=COLLECTION_NAME,
+                points_selector=models.PointIdsList(points=point_ids),
+            )
+
+            cur.execute(
+                """
+                UPDATE jobs_curated
+                SET embedding_status = 'skipped', updated_at = NOW()
+                WHERE job_id = ANY(%s)
+                """,
+                (job_ids,),
+            )
+        conn.commit()
+
+    return {"deleted": len(job_ids)}
+
 # Airflow entrypoint для инициализации коллекции и загрузки вакансий
 def run_embedding_step(date_str: str = None) -> Dict:
-    """AIRFLOW TASK 5: Init collection + load new vacancies."""
     init_qdrant()
-    return load_vacancies_to_qdrant(date_str)
+
+    delete_summary = delete_inactive_jobs_from_qdrant()
+    load_summary = load_vacancies_to_qdrant(date_str=date_str)
+
+    summary = {
+        "deleted_inactive": delete_summary.get("deleted", 0),
+        "loaded": load_summary.get("loaded", 0),
+        "failed": load_summary.get("failed", 0),
+        "date_str": date_str,
+    }
+    logger.info("Embedding step complete: %s", summary)
+    return summary
 
 # Локальный запуск для проверки
 if __name__ == "__main__":

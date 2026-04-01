@@ -554,10 +554,12 @@ def run_refresh_job_skills_step(etl_run_id: Optional[int] = None) -> dict:
 
 
 # Полный пересчёт v2-аналитики для Streamlit.
-# Источник: jobs_curated + job_skills.
+# Источник: v_jobs_analytics_base + job_skills.
 #
 # ВАЖНО:
-# - salary_aggregates_v2 хранит статистику в исходной валюте вакансий.
+# - v2-аналитика агрегируется по role_family.
+# - salary_aggregates_v2, market_role_stats_v2 и market_skill_stats_v2
+#   считают зарплаты в RUB.
 # - market_skill_stats_v2 использует DISTINCT по (job_id, skill_id),
 #   чтобы один и тот же навык, пришедший из нескольких source_type,
 #   не завышал медианы и доли.
@@ -588,8 +590,55 @@ def run_aggregate_v2_step(etl_run_id: Optional[int] = None) -> dict:
         )
         logger.info("v2 aggregate tables truncated before rebuild")
 
+        # 1) salary_aggregates_v2
+        # Храним агрегаты в единой валюте RUB и агрегируем по role_family,
+        # чтобы не дробить рынок на тысячи specialty/title.
         cur.execute(
             """
+            WITH base AS (
+                SELECT
+                    COALESCE(NULLIF(BTRIM(role_family), ''), 'other') AS role,
+                    COALESCE(NULLIF(BTRIM(COALESCE(country_normalized, country)), ''), 'unknown') AS country,
+                    COALESCE(NULLIF(BTRIM(seniority_normalized), ''), 'unknown') AS seniority,
+                    COALESCE(remote, remote_type IN ('remote', 'hybrid')) AS is_remote,
+                    CASE
+                        WHEN salary_from_rub IS NOT NULL AND salary_to_rub IS NOT NULL THEN (salary_from_rub + salary_to_rub) / 2.0
+                        WHEN salary_from_rub IS NOT NULL THEN salary_from_rub::numeric
+                        WHEN salary_to_rub IS NOT NULL THEN salary_to_rub::numeric
+                        WHEN salary_from IS NOT NULL AND salary_to IS NOT NULL THEN
+                            (
+                                convert_salary(
+                                    salary_from::numeric,
+                                    currency,
+                                    'RUB',
+                                    COALESCE(published_at::date, parsed_at::date, CURRENT_DATE)
+                                )
+                                +
+                                convert_salary(
+                                    salary_to::numeric,
+                                    currency,
+                                    'RUB',
+                                    COALESCE(published_at::date, parsed_at::date, CURRENT_DATE)
+                                )
+                            ) / 2.0
+                        WHEN salary_from IS NOT NULL THEN
+                            convert_salary(
+                                salary_from::numeric,
+                                currency,
+                                'RUB',
+                                COALESCE(published_at::date, parsed_at::date, CURRENT_DATE)
+                            )
+                        WHEN salary_to IS NOT NULL THEN
+                            convert_salary(
+                                salary_to::numeric,
+                                currency,
+                                'RUB',
+                                COALESCE(published_at::date, parsed_at::date, CURRENT_DATE)
+                            )
+                        ELSE NULL
+                    END AS salary_mid_rub
+                FROM v_jobs_analytics_base
+            )
             INSERT INTO salary_aggregates_v2 (
                 role,
                 country,
@@ -604,59 +653,75 @@ def run_aggregate_v2_step(etl_run_id: Optional[int] = None) -> dict:
                 updated_at
             )
             SELECT
-                COALESCE(NULLIF(BTRIM(specialty), ''), NULLIF(BTRIM(title_normalized), ''), NULLIF(BTRIM(title), ''), 'unknown') AS role,
-                COALESCE(NULLIF(BTRIM(COALESCE(country_normalized, country)), ''), 'unknown') AS country,
-                COALESCE(NULLIF(BTRIM(seniority_normalized), ''), 'unknown') AS seniority,
-                COALESCE(remote, remote_type IN ('remote', 'hybrid')) AS is_remote,
-                COALESCE(NULLIF(BTRIM(currency), ''), 'unknown') AS currency,
+                role,
+                country,
+                seniority,
+                is_remote,
+                'RUB' AS currency,
                 COUNT(*) AS sample_size,
-                PERCENTILE_CONT(0.25) WITHIN GROUP (ORDER BY salary_midpoint) AS p25,
-                PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY salary_midpoint) AS p50,
-                PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY salary_midpoint) AS p75,
-                AVG(salary_midpoint) AS avg_salary,
+                PERCENTILE_CONT(0.25) WITHIN GROUP (ORDER BY salary_mid_rub) AS p25,
+                PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY salary_mid_rub) AS p50,
+                PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY salary_mid_rub) AS p75,
+                ROUND(AVG(salary_mid_rub), 2) AS avg_salary,
                 NOW() AS updated_at
-            FROM (
-                SELECT
-                    specialty,
-                    title_normalized,
-                    title,
-                    country,
-                    country_normalized,
-                    seniority_normalized,
-                    remote,
-                    remote_type,
-                    currency,
-                    CASE
-                        WHEN salary_from IS NOT NULL AND salary_to IS NOT NULL THEN (salary_from + salary_to) / 2.0
-                        WHEN salary_from IS NOT NULL THEN salary_from
-                        WHEN salary_to IS NOT NULL THEN salary_to
-                        ELSE NULL
-                    END AS salary_midpoint
-                FROM jobs_curated
-            ) t
-            WHERE salary_midpoint IS NOT NULL
-            GROUP BY 1,2,3,4,5;
+            FROM base
+            WHERE salary_mid_rub IS NOT NULL
+              AND salary_mid_rub > 0
+            GROUP BY role, country, seniority, is_remote
+            HAVING COUNT(*) >= 10;
             """
         )
         summary["salary_aggregates_v2_updated"] = cur.rowcount
         logger.info("salary_aggregates_v2: %s rows inserted", cur.rowcount)
 
+        # 2) market_role_stats_v2
+        # Основная витрина для Streamlit: role_family + зарплата в RUB.
         cur.execute(
             """
             WITH base AS (
                 SELECT
-                    COALESCE(NULLIF(BTRIM(specialty), ''), NULLIF(BTRIM(title_normalized), ''), NULLIF(BTRIM(title), ''), 'unknown') AS role,
+                    COALESCE(NULLIF(BTRIM(role_family), ''), 'other') AS role,
                     COALESCE(NULLIF(BTRIM(COALESCE(country_normalized, country)), ''), 'unknown') AS country,
                     COALESCE(NULLIF(BTRIM(seniority_normalized), ''), 'unknown') AS seniority,
                     COALESCE(remote, remote_type IN ('remote', 'hybrid')) AS is_remote,
                     CASE
-                        WHEN salary_from IS NOT NULL AND salary_to IS NOT NULL THEN (salary_from + salary_to) / 2.0
-                        WHEN salary_from IS NOT NULL THEN salary_from
-                        WHEN salary_to IS NOT NULL THEN salary_to
+                        WHEN salary_from_rub IS NOT NULL AND salary_to_rub IS NOT NULL THEN (salary_from_rub + salary_to_rub) / 2.0
+                        WHEN salary_from_rub IS NOT NULL THEN salary_from_rub::numeric
+                        WHEN salary_to_rub IS NOT NULL THEN salary_to_rub::numeric
+                        WHEN salary_from IS NOT NULL AND salary_to IS NOT NULL THEN
+                            (
+                                convert_salary(
+                                    salary_from::numeric,
+                                    currency,
+                                    'RUB',
+                                    COALESCE(published_at::date, parsed_at::date, CURRENT_DATE)
+                                )
+                                +
+                                convert_salary(
+                                    salary_to::numeric,
+                                    currency,
+                                    'RUB',
+                                    COALESCE(published_at::date, parsed_at::date, CURRENT_DATE)
+                                )
+                            ) / 2.0
+                        WHEN salary_from IS NOT NULL THEN
+                            convert_salary(
+                                salary_from::numeric,
+                                currency,
+                                'RUB',
+                                COALESCE(published_at::date, parsed_at::date, CURRENT_DATE)
+                            )
+                        WHEN salary_to IS NOT NULL THEN
+                            convert_salary(
+                                salary_to::numeric,
+                                currency,
+                                'RUB',
+                                COALESCE(published_at::date, parsed_at::date, CURRENT_DATE)
+                            )
                         ELSE NULL
-                    END AS salary_midpoint,
+                    END AS salary_mid_rub,
                     COALESCE(years_experience_min, years_experience_max, 1) AS years_exp_proxy
-                FROM jobs_curated
+                FROM v_jobs_analytics_base
             )
             INSERT INTO market_role_stats_v2 (
                 role,
@@ -675,33 +740,67 @@ def run_aggregate_v2_step(etl_run_id: Optional[int] = None) -> dict:
                 seniority,
                 is_remote,
                 COUNT(*) AS jobs_count,
-                PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY salary_midpoint) AS median_salary,
-                AVG(salary_midpoint) AS avg_salary,
+                PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY salary_mid_rub) AS median_salary,
+                ROUND(AVG(salary_mid_rub), 2) AS avg_salary,
                 ROUND(COUNT(*)::numeric / GREATEST(AVG(NULLIF(years_exp_proxy, 0)), 1), 2) AS competition_proxy,
                 NOW() AS updated_at
             FROM base
-            GROUP BY role, country, seniority, is_remote;
+            GROUP BY role, country, seniority, is_remote
+            HAVING COUNT(*) >= 20;
             """
         )
         summary["market_role_stats_v2_updated"] = cur.rowcount
         logger.info("market_role_stats_v2: %s rows inserted", cur.rowcount)
 
+        # 3) market_skill_stats_v2
+        # Доли навыков считаем только на срезах с достаточным объёмом,
+        # иначе таблица превращается в шум из групп по 5 вакансий.
         cur.execute(
             """
             WITH base_jobs AS (
                 SELECT
                     jc.job_id,
-                    COALESCE(NULLIF(BTRIM(jc.specialty), ''), NULLIF(BTRIM(jc.title_normalized), ''), NULLIF(BTRIM(jc.title), ''), 'unknown') AS role,
+                    COALESCE(NULLIF(BTRIM(jc.role_family), ''), 'other') AS role,
                     COALESCE(NULLIF(BTRIM(COALESCE(jc.country_normalized, jc.country)), ''), 'unknown') AS country,
                     COALESCE(NULLIF(BTRIM(jc.seniority_normalized), ''), 'unknown') AS seniority,
                     COALESCE(jc.remote, jc.remote_type IN ('remote', 'hybrid')) AS is_remote,
                     CASE
-                        WHEN jc.salary_from IS NOT NULL AND jc.salary_to IS NOT NULL THEN (jc.salary_from + jc.salary_to) / 2.0
-                        WHEN jc.salary_from IS NOT NULL THEN jc.salary_from
-                        WHEN jc.salary_to IS NOT NULL THEN jc.salary_to
+                        WHEN jc.salary_from_rub IS NOT NULL AND jc.salary_to_rub IS NOT NULL THEN (jc.salary_from_rub + jc.salary_to_rub) / 2.0
+                        WHEN jc.salary_from_rub IS NOT NULL THEN jc.salary_from_rub::numeric
+                        WHEN jc.salary_to_rub IS NOT NULL THEN jc.salary_to_rub::numeric
+                        WHEN jc.salary_from IS NOT NULL AND jc.salary_to IS NOT NULL THEN
+                            (
+                                convert_salary(
+                                    jc.salary_from::numeric,
+                                    jc.currency,
+                                    'RUB',
+                                    COALESCE(jc.published_at::date, jc.parsed_at::date, CURRENT_DATE)
+                                )
+                                +
+                                convert_salary(
+                                    jc.salary_to::numeric,
+                                    jc.currency,
+                                    'RUB',
+                                    COALESCE(jc.published_at::date, jc.parsed_at::date, CURRENT_DATE)
+                                )
+                            ) / 2.0
+                        WHEN jc.salary_from IS NOT NULL THEN
+                            convert_salary(
+                                jc.salary_from::numeric,
+                                jc.currency,
+                                'RUB',
+                                COALESCE(jc.published_at::date, jc.parsed_at::date, CURRENT_DATE)
+                            )
+                        WHEN jc.salary_to IS NOT NULL THEN
+                            convert_salary(
+                                jc.salary_to::numeric,
+                                jc.currency,
+                                'RUB',
+                                COALESCE(jc.published_at::date, jc.parsed_at::date, CURRENT_DATE)
+                            )
                         ELSE NULL
-                    END AS salary_midpoint
-                FROM jobs_curated jc
+                    END AS salary_mid_rub
+                FROM v_jobs_analytics_base jc
             ),
             market_slices AS (
                 SELECT
@@ -712,6 +811,7 @@ def run_aggregate_v2_step(etl_run_id: Optional[int] = None) -> dict:
                     COUNT(*) AS jobs_total
                 FROM base_jobs
                 GROUP BY role, country, seniority, is_remote
+                HAVING COUNT(*) >= 20
             ),
             jobs_with_skills AS (
                 SELECT DISTINCT
@@ -721,10 +821,15 @@ def run_aggregate_v2_step(etl_run_id: Optional[int] = None) -> dict:
                     bj.is_remote,
                     js.skill_id,
                     bj.job_id,
-                    bj.salary_midpoint
+                    bj.salary_mid_rub
                 FROM base_jobs bj
+                JOIN market_slices ms
+                  ON ms.role = bj.role
+                 AND ms.country = bj.country
+                 AND ms.seniority = bj.seniority
+                 AND ms.is_remote = bj.is_remote
                 JOIN job_skills js
-                    ON js.job_id = bj.job_id
+                  ON js.job_id = bj.job_id
             ),
             with_skill AS (
                 SELECT
@@ -734,9 +839,10 @@ def run_aggregate_v2_step(etl_run_id: Optional[int] = None) -> dict:
                     is_remote,
                     skill_id,
                     COUNT(DISTINCT job_id) AS jobs_with_skill,
-                    PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY salary_midpoint) AS salary_median_with_skill
+                    PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY salary_mid_rub) AS salary_median_with_skill
                 FROM jobs_with_skills
                 GROUP BY role, country, seniority, is_remote, skill_id
+                HAVING COUNT(DISTINCT job_id) >= 3
             ),
             without_skill AS (
                 SELECT
@@ -745,16 +851,21 @@ def run_aggregate_v2_step(etl_run_id: Optional[int] = None) -> dict:
                     bj.seniority,
                     bj.is_remote,
                     s.skill_id,
-                    PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY bj.salary_midpoint) AS salary_median_without_skill
+                    PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY bj.salary_mid_rub) AS salary_median_without_skill
                 FROM base_jobs bj
                 JOIN (
                     SELECT DISTINCT role, country, seniority, is_remote, skill_id
-                    FROM jobs_with_skills
+                    FROM with_skill
                 ) s
                   ON s.role = bj.role
                  AND s.country = bj.country
                  AND s.seniority = bj.seniority
                  AND s.is_remote = bj.is_remote
+                JOIN market_slices ms
+                  ON ms.role = bj.role
+                 AND ms.country = bj.country
+                 AND ms.seniority = bj.seniority
+                 AND ms.is_remote = bj.is_remote
                 WHERE NOT EXISTS (
                     SELECT 1
                     FROM job_skills js
@@ -789,8 +900,9 @@ def run_aggregate_v2_step(etl_run_id: Optional[int] = None) -> dict:
                 ws.salary_median_with_skill,
                 wos.salary_median_without_skill,
                 CASE
-                    WHEN ws.salary_median_with_skill IS NOT NULL AND wos.salary_median_without_skill IS NOT NULL
-                        THEN ws.salary_median_with_skill - wos.salary_median_without_skill
+                    WHEN ws.salary_median_with_skill IS NOT NULL
+                     AND wos.salary_median_without_skill IS NOT NULL
+                    THEN ws.salary_median_with_skill - wos.salary_median_without_skill
                     ELSE NULL
                 END AS salary_delta,
                 NOW() AS updated_at
@@ -825,33 +937,19 @@ def run_aggregate_v2_step(etl_run_id: Optional[int] = None) -> dict:
     except Exception as e:
         summary["status"] = "failed"
         summary["error"] = str(e)
-        logger.error("Aggregate v2 step failed: %s", e)
-
-        if conn is not None:
-            try:
-                conn.rollback()
-            except Exception:
-                pass
-
-        raise
-
+        logger.exception("run_aggregate_v2_step failed: %s", e)
+        if conn:
+            conn.rollback()
     finally:
-        if cur is not None:
-            try:
-                cur.close()
-            except Exception:
-                pass
-        if conn is not None:
-            try:
-                conn.close()
-            except Exception:
-                pass
+        if cur:
+            cur.close()
+        if conn:
+            conn.close()
 
-    logger.info("Aggregate v2 step complete: %s", summary)
     return summary
 
 # Локальный запуск для ручной проверки
 if __name__ == "__main__":
-    result = run_aggregate_step()
-    print(result)  
+    result = run_aggregate_v2_step()
+    print(result)
     
