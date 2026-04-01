@@ -21,6 +21,16 @@ from .utils.skill_normalizer import extract_skills_from_text, normalize_skills, 
 logger = logging.getLogger(__name__)
 
 
+def _get_salary_bounds_rub(payload: Dict[str, Any]) -> tuple[Optional[float], Optional[float]]:
+    salary_from_rub = payload.get("salary_from_rub")
+    salary_to_rub = payload.get("salary_to_rub")
+
+    if salary_from_rub is not None or salary_to_rub is not None:
+        return salary_from_rub, salary_to_rub
+
+    return payload.get("salary_from"), payload.get("salary_to")
+
+
 class VacancySearchTool:
     """Инструмент для семантического поиска вакансий в Qdrant."""
 
@@ -109,14 +119,13 @@ class VacancySearchTool:
                     all_skills.extend(skills_raw)
 
                 # Зарплатная статистика
-                salary_from = payload.get("salary_from")
-                salary_to = payload.get("salary_to")
+                salary_from, salary_to = _get_salary_bounds_rub(payload)
 
-                if salary_from and salary_to:
+                if salary_from is not None and salary_to is not None:
                     estimated_salaries.append((salary_from + salary_to) / 2)
-                elif salary_from:
+                elif salary_from is not None:
                     estimated_salaries.append(salary_from * 1.2)
-                elif salary_to:
+                elif salary_to is not None:
                     estimated_salaries.append(salary_to * 0.8)
 
             salary_median = int(statistics.median(estimated_salaries)) if estimated_salaries else 0

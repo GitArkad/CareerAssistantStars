@@ -93,6 +93,26 @@ def _run_async_safe(coro):
         return asyncio.run(coro)
 
 
+def _format_salary_rub(vacancy: Dict[str, Any]) -> str:
+    salary_from = vacancy.get("salary_from_rub")
+    salary_to = vacancy.get("salary_to_rub")
+
+    if salary_from is None and salary_to is None:
+        salary_from = vacancy.get("salary_from")
+        salary_to = vacancy.get("salary_to")
+        currency = vacancy.get("currency")
+        if currency and currency != "RUB" and (salary_from is not None or salary_to is not None):
+            return "з/п указана в локальной валюте"
+
+    if salary_from is not None and salary_to is not None:
+        return f"{salary_from:,}–{salary_to:,} ₽".replace(",", " ")
+    if salary_from is not None:
+        return f"от {salary_from:,} ₽".replace(",", " ")
+    if salary_to is not None:
+        return f"до {salary_to:,} ₽".replace(",", " ")
+    return "з/п не указана"
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # ИНСТРУМЕНТЫ (TOOLS) — декларации для bind_tools
 # ═══════════════════════════════════════════════════════════════════════
@@ -590,8 +610,7 @@ def tools_node(state: AgentState) -> Dict[str, Any]:
                     if vacancies:
                         lines = [f"Найдено вакансий: {len(vacancies)}\n"]
                         for i, v in enumerate(vacancies, 1):
-                            sf, st = v.get('salary_from'), v.get('salary_to')
-                            salary = f"{sf:,}–{st:,} ₽".replace(",", " ") if sf and st else (f"от {sf:,} ₽".replace(",", " ") if sf else (f"до {st:,} ₽".replace(",", " ") if st else "з/п не указана"))
+                            salary = _format_salary_rub(v)
                             skills_str = ", ".join(v.get('skills') or []) or "не указаны"
                             lines.append(f"**{i}. {v.get('title','?')}**")
                             lines.append(f"Компания: {v.get('company','?')} | Локация: {v.get('city','?')}")
