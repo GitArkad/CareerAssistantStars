@@ -1,6 +1,10 @@
 import json
-import streamlit as st
+from datetime import date, datetime
+import math
+
+import pandas as pd
 import requests
+import streamlit as st
 from app.utils.style_loader import apply_custom_styles
 
 apply_custom_styles()
@@ -29,11 +33,41 @@ def reset_chat():
     # НЕ трогаем backend_state!
     st.rerun()
 
+def make_json_safe(value):
+    if isinstance(value, dict):
+        return {str(k): make_json_safe(v) for k, v in value.items()}
+
+    if isinstance(value, list):
+        return [make_json_safe(v) for v in value]
+
+    if isinstance(value, tuple):
+        return [make_json_safe(v) for v in value]
+
+    if isinstance(value, (pd.Timestamp, datetime, date)):
+        return value.isoformat()
+
+    if pd.isna(value):
+        return None
+
+    if hasattr(value, "item"):
+        try:
+            return value.item()
+        except Exception:
+            pass
+
+    if isinstance(value, float) and math.isnan(value):
+        return None
+
+    return value
+
 
 def send_to_backend(message: str = "", uploaded_file=None):
+    st.session_state.backend_state = make_json_safe(st.session_state.backend_state)
+    safe_state = st.session_state.backend_state
+
     data = {
         "message": message,
-        "state": json.dumps(st.session_state.backend_state, ensure_ascii=False),
+        "state": json.dumps(safe_state, ensure_ascii=False),
     }
 
     files = None
@@ -121,12 +155,9 @@ def render_response_content(response_data):
 st.markdown("### 🤖 Что умеет чат")
 st.markdown("""
 Чат может помогать в нескольких сценариях:
-
-- **Interview simulator** — подготовка к интервью
 - **Roadmap** — построение плана развития
 - **Resume help** — советы по улучшению резюме
 - **Vacancy search** — помощь с поиском вакансий
-- **Career guidance** — карьерные рекомендации
 """)
 
 info_col1, info_col2 = st.columns([2, 1])
@@ -166,7 +197,7 @@ if candidate_profile:
 else:
     st.warning("Профиль кандидата пока не загружен.")
     
-if st.session_state.chat_messages_seed:
+if st.session_state.chat_messages_seed and not st.session_state.messages:
     st.session_state.messages = st.session_state.chat_messages_seed
     st.session_state.chat_messages_seed = None
 

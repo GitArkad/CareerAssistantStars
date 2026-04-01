@@ -167,7 +167,7 @@ def main():
     with st.sidebar:
         st.markdown("## ⚙️ Подключение к БД")
 
-        host = st.text_input("Host", value=os.getenv("POSTGRES_HOST", DEFAULT_HOST))
+        host = st.text_input("Host", value=DEFAULT_HOST, type="password")
         port = st.number_input(
             "Port",
             min_value=1,
@@ -228,7 +228,7 @@ def main():
         st.error(f"Не удалось получить колонки таблицы: {e}")
         return
 
-    default_limit = 100000
+    default_limit = 30000
 
     with top2:
         st.caption("Можно использовать автозагрузку таблицы или написать свой SQL.")
@@ -406,34 +406,38 @@ def main():
     left2, right2 = st.columns(2)
 
     with left2:
-        if date_col and category_col:
-            ts_df = filtered_df.copy()
-            ts_df[date_col] = pd.to_datetime(ts_df[date_col], errors="coerce")
-            ts_df = ts_df.dropna(subset=[date_col])
+        if "city" in filtered_df.columns:
+            city_grouped = (
+                filtered_df["city"]
+                .fillna("Не указано")
+                .astype(str)
+                .value_counts()
+                .head(15)
+                .reset_index()
+            )
+            city_grouped.columns = ["city", "count"]
 
-            if not ts_df.empty:
-                ts_grouped = (
-                    ts_df.groupby(ts_df[date_col].dt.date)
-                    .size()
-                    .reset_index(name="count")
-                )
-                ts_grouped.columns = [date_col, "count"]
+            fig = px.bar(
+                city_grouped,
+                x="count",
+                y="city",
+                orientation="h",
+                title="Топ городов по числу вакансий",
+                labels={
+                    "city": "Город",
+                    "count": "Количество вакансий"
+                }
+            )
 
-                fig = px.line(
-                    ts_grouped,
-                    x=date_col,
-                    y="count",
-                    title=f"Динамика по {col_label(date_col)}",
-                    labels={
-                        date_col: col_label(date_col),
-                        "count": col_label("count")
-                    }
-                )
-                st.plotly_chart(fig, use_container_width=True)
-            else:
-                st.info("Нет данных для временного ряда.")
+            fig.update_layout(
+                xaxis_title="Количество вакансий",
+                yaxis_title="Город",
+                yaxis=dict(autorange="reversed")
+            )
+
+            st.plotly_chart(fig, use_container_width=True)
         else:
-            st.info("Не найдена дата-колонка для линейного графика.")
+            st.info("Нет колонки city для анализа.")
 
     with right2:
         text_col = "title" if "title" in filtered_df.columns else category_col

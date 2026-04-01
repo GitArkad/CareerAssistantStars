@@ -190,9 +190,25 @@ class CareerAgent:
             )
 
             state["market"] = market_context
+            def serialize(obj):
+                import pandas as pd
+                from datetime import datetime
+
+                if isinstance(obj, pd.Timestamp):
+                    return obj.isoformat()
+                if isinstance(obj, datetime):
+                    return obj.isoformat()
+                return obj
+
+
+            def serialize_list(data):
+                return [
+                    {k: serialize(v) for k, v in item.items()}
+                    for item in data
+                ]
             state["response"] = vacancies
             state["last_action"] = "Агент отработал: search"
-
+            
             return state
 
         # -----------------------------
