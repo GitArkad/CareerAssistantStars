@@ -10,10 +10,11 @@ FastAPI-приложение для AI Career Assistant.
 """
 
 from dotenv import load_dotenv
-load_dotenv()
+load_dotenv(override=True)
 
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 from typing import Optional, Dict, Any, List
 import uuid
@@ -21,25 +22,25 @@ import json
 import logging
 from langchain_core.messages import HumanMessage, AIMessage, BaseMessage, ToolMessage
 
-from app.agents7.graph import get_agent
-from app.agents7.state import AgentState, CandidateProfile
-from app.agents7.resume_parser import parse_resume_from_pdf, parse_resume_from_text
-from app.agents7.utils.pdf_parser import parse_pdf
-from app.agents7.tools import vacancy_search_tool
+from agents6_2.graph import get_agent
+from agents6_2.state import AgentState, CandidateProfile
+from agents6_2.resume_parser import parse_resume_from_pdf, parse_resume_from_text
+from agents6_2.utils.pdf_parser import parse_pdf
+from agents6_2.tools import vacancy_search_tool
 
-from app.agents7.services.resume_adapter import (
+from agents6_2.services.resume_adapter import (
     adapt_resume_to_vacancy,
     should_trigger_resume_adaptation,
     extract_resume_data_from_state,
 )
-from app.agents7.services.interview_service import (
+from agents6_2.services.interview_service import (
     should_trigger_interview,
     start_interview,
     handle_interview_answer,
     set_llm_clients,
 )
 
-from app.agents7.nodes import get_llm_client, GROQ_MODEL_FAST, GROQ_MODEL_SMART
+from agents6_2.nodes import get_llm_client, GROQ_MODEL_FAST, GROQ_MODEL_SMART
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -55,6 +56,7 @@ app.add_middleware(
 )
 
 agent = None
+session_store: Dict[str, Dict] = {}  # thread_id → state
 
 
 @app.on_event("startup")
@@ -88,6 +90,8 @@ class ChatResponse(BaseModel):
     response: str
     thread_id: str
     interview_state: Optional[Dict[str, Any]] = None
+    debug_state: Optional[Dict[str, Any]] = None
+    state: Optional[str] = None  # JSON для передачи в следующий запрос
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -186,16 +190,136 @@ def _build_initial_state(
 # ЭНДПОИНТЫ
 # ═══════════════════════════════════════════════════════════════════════
 
+@app.get("/", response_class=HTMLResponse)
+async def chat_ui():
+    """Простой чат-интерфейс для тестирования."""
+    return HTMLResponse(content="""<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI Career Assistant</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+         background: #f0f2f5; height: 100vh; display: flex; flex-direction: column; }
+  header { background: #1a1a2e; color: white; padding: 14px 20px;
+           display: flex; align-items: center; justify-content: space-between; }
+  header h1 { font-size: 16px; font-weight: 600; }
+  #thread-label { font-size: 11px; color: #888; }
+  #messages { flex: 1; overflow-y: auto; padding: 20px;
+              display: flex; flex-direction: column; gap: 12px; }
+  .msg { max-width: 72%; padding: 10px 14px; border-radius: 16px;
+         line-height: 1.5; font-size: 14px; white-space: pre-wrap; word-break: break-word; }
+  .msg.user { align-self: flex-end; background: #1a1a2e; color: white;
+              border-bottom-right-radius: 4px; }
+  .msg.bot  { align-self: flex-start; background: white; color: #222;
+              border-bottom-left-radius: 4px; box-shadow: 0 1px 3px rgba(0,0,0,.1); }
+  .msg.bot strong { font-weight: 700; }
+  .msg.typing { color: #999; font-style: italic; }
+  #input-row { display: flex; gap: 8px; padding: 14px 20px;
+               background: white; border-top: 1px solid #e0e0e0; }
+  #msg-input { flex: 1; padding: 10px 14px; border: 1px solid #ddd;
+               border-radius: 24px; font-size: 14px; outline: none;
+               resize: none; max-height: 120px; overflow-y: auto; }
+  #msg-input:focus { border-color: #1a1a2e; }
+  #send-btn { padding: 10px 20px; background: #1a1a2e; color: white;
+              border: none; border-radius: 24px; cursor: pointer;
+              font-size: 14px; font-weight: 600; white-space: nowrap; }
+  #send-btn:disabled { background: #ccc; cursor: not-allowed; }
+  #new-chat-btn { padding: 6px 12px; background: transparent; color: #aaa;
+                  border: 1px solid #444; border-radius: 12px; cursor: pointer;
+                  font-size: 12px; }
+  #new-chat-btn:hover { color: white; border-color: white; }
+</style>
+</head>
+<body>
+<header>
+  <h1>🤖 AI Career Assistant</h1>
+  <div style="display:flex;align-items:center;gap:12px">
+    <span id="thread-label">thread: —</span>
+    <button id="new-chat-btn" onclick="newChat()">Новый чат</button>
+  </div>
+</header>
+<div id="messages">
+  <div class="msg bot">Привет! Я помогу найти вакансии, составить план развития или адаптировать резюме. Что ищешь?</div>
+</div>
+<div id="input-row">
+  <textarea id="msg-input" placeholder="Напиши сообщение..." rows="1"
+    onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendMsg()}"
+    oninput="this.style.height='auto';this.style.height=this.scrollHeight+'px'"></textarea>
+  <button id="send-btn" onclick="sendMsg()">Отправить</button>
+</div>
+<script>
+  function getThreadId() {
+    let tid = localStorage.getItem('career_thread_id');
+    if (!tid) { tid = 'chat-' + Math.random().toString(36).slice(2,9); localStorage.setItem('career_thread_id', tid); }
+    return tid;
+  }
+  function newChat() {
+    localStorage.removeItem('career_thread_id');
+    location.reload();
+  }
+  document.getElementById('thread-label').textContent = 'thread: ' + getThreadId();
+
+  function renderMarkdown(text) {
+    return text
+      .replace(/\\*\\*(.+?)\\*\\*/g, '<strong>$1</strong>')
+      .replace(/^• /gm, '&bull; ')
+      .replace(/\\n/g, '<br>');
+  }
+
+  function addMsg(text, role) {
+    const div = document.createElement('div');
+    div.className = 'msg ' + role;
+    div.innerHTML = role === 'bot' ? renderMarkdown(text) : text;
+    document.getElementById('messages').appendChild(div);
+    div.scrollIntoView({behavior:'smooth'});
+    return div;
+  }
+
+  async function sendMsg() {
+    const input = document.getElementById('msg-input');
+    const text = input.value.trim();
+    if (!text) return;
+    input.value = ''; input.style.height = 'auto';
+
+    const btn = document.getElementById('send-btn');
+    btn.disabled = true;
+
+    addMsg(text, 'user');
+    const typing = addMsg('Печатает...', 'bot typing');
+
+    try {
+      const res = await fetch('/chat_json', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({message: text, thread_id: getThreadId()})
+      });
+      const data = await res.json();
+      typing.remove();
+      addMsg(data.response || '(нет ответа)', 'bot');
+    } catch(e) {
+      typing.remove();
+      addMsg('Ошибка соединения: ' + e.message, 'bot');
+    }
+    btn.disabled = false;
+    input.focus();
+  }
+</script>
+</body>
+</html>""")
+
+
 @app.post("/chat")
 async def chat_legacy(
     request: Request,
     message: Optional[str] = Form(None),
     file: Optional[UploadFile] = File(None),
     state: Optional[str] = Form(None),
+    thread_id: Optional[str] = Form(None),
 ):
     """Обработчик чата с гарантированным возвратом ответа."""
-    thread_id = None
-
     try:
         # === 1. Парсинг входных данных ===
         current_state = {}
@@ -203,7 +327,8 @@ async def chat_legacy(
         if state:
             try:
                 current_state = json.loads(state)
-                thread_id = current_state.get("thread_id")
+                if not thread_id:
+                    thread_id = current_state.get("thread_id")
             except json.JSONDecodeError:
                 logger.warning(f"⚠️ Невалидный state JSON")
                 current_state = {}
@@ -211,7 +336,12 @@ async def chat_legacy(
         if not thread_id:
             thread_id = str(uuid.uuid4())
 
-        config = {"configurable": {"thread_id": thread_id}, "recursion_limit": 5}
+        # Восстанавливаем state из сервер-сайд хранилища если клиент не передал
+        if not current_state and thread_id in session_store:
+            current_state = session_store[thread_id]
+            logger.info(f"🔄 Восстановлен state из session_store для thread_id={thread_id}")
+
+        config = {"configurable": {"thread_id": thread_id}, "recursion_limit": 10}
         logger.info(f"📥 /chat: message='{(message or '')[:30]}...', thread_id={thread_id}")
 
         if not message and not file:
@@ -301,10 +431,36 @@ async def chat_legacy(
         # === 6. ОБЫЧНЫЙ ПУТЬ: агент ===
         logger.info("🤖 Запуск графа...")
         result_dict: Dict = await agent.ainvoke(input_state, config=config)
+        candidate = result_dict.get("candidate")
+        candidate_skills = candidate.get("skills") if isinstance(candidate, dict) else getattr(candidate, "skills", None)
+        mc = result_dict.get("market_context") or {}
+        vacancies_count = len(mc.get("top_vacancies", [])) if isinstance(mc, dict) else 0
+        logger.info(f"📊 STATE: skills={candidate_skills}, vacancies={vacancies_count}, iter={result_dict.get('iteration_count')}, filled_keys={[k for k, v in result_dict.items() if v]}")
         response_message = _extract_assistant_response(result_dict)
 
+        debug_state = {
+            "skills": candidate_skills,
+            "vacancies_count": vacancies_count,
+            "iteration_count": result_dict.get("iteration_count"),
+            "skills_gap": result_dict.get("skills_gap"),
+            "market_salary_median": mc.get("salary_median") if isinstance(mc, dict) else None,
+            "filled_keys": [k for k, v in result_dict.items() if v],
+        }
+        # Сериализуем state для передачи в следующий запрос
+        candidate_raw = result_dict.get("candidate")
+        state_to_pass = {
+            "thread_id": thread_id,
+            "market_context": mc if isinstance(mc, dict) else None,
+            "top_vacancies": result_dict.get("top_vacancies"),
+            "skills_gap": result_dict.get("skills_gap"),
+            "candidate": candidate_raw.model_dump() if hasattr(candidate_raw, "model_dump") else candidate_raw,
+        }
+        state_json = json.dumps({k: v for k, v in state_to_pass.items() if v is not None}, ensure_ascii=False)
+        session_store[thread_id] = {k: v for k, v in state_to_pass.items() if v is not None}
+        logger.info(f"💾 State сохранён для thread_id={thread_id}")
+
         logger.info(f"📤 Ответ: '{response_message[:100]}...'")
-        return ChatResponse(response=response_message, thread_id=thread_id)
+        return ChatResponse(response=response_message, thread_id=thread_id, debug_state=debug_state, state=state_json)
 
     except Exception as e:
         logger.exception(f"❌ GLOBAL ERROR: {type(e).__name__}: {e}")
@@ -328,8 +484,27 @@ async def chat_json(request: ChatRequest):
         location=request.location,
     )
 
+    # Восстанавливаем market_context и другие поля из сессии
+    if thread_id in session_store:
+        saved = session_store[thread_id]
+        logger.info(f"🔄 /chat_json: восстановлен state из session_store для thread_id={thread_id}")
+        for key in ["market_context", "interview", "candidate", "skills_gap", "top_vacancies"]:
+            if saved.get(key) and not input_state.get(key):
+                input_state[key] = saved[key]
+
     result_dict = await agent.ainvoke(input_state, config=config)
     response_message = _extract_assistant_response(result_dict)
+
+    # Сохраняем state в сессию
+    mc = result_dict.get("market_context") or {}
+    session_store[thread_id] = {k: v for k, v in {
+        "thread_id": thread_id,
+        "market_context": mc if isinstance(mc, dict) else None,
+        "top_vacancies": result_dict.get("top_vacancies"),
+        "skills_gap": result_dict.get("skills_gap"),
+        "candidate": result_dict.get("candidate"),
+    }.items() if v is not None}
+    logger.info(f"💾 /chat_json: state сохранён для thread_id={thread_id}")
 
     logger.info(f"📤 Ответ: '{response_message[:100]}...'")
     return ChatResponse(response=response_message, thread_id=thread_id)
