@@ -10,7 +10,8 @@ COPY requirements.frontend.txt requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY frontend/ /app/frontend/
+COPY frontend/.streamlit /app/.streamlit
 
 EXPOSE 8501
 
-CMD ["streamlit", "run", "frontend/pages.py", "--server.port=8501", "--server.address=0.0.0.0", "--server.headless=true"]
+CMD ["streamlit", "run", "frontend/app/main.py", "--server.port=8501", "--server.address=0.0.0.0", "--server.headless=true"]
