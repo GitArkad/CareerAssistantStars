@@ -8,6 +8,7 @@ from typing import Any, Dict
 from components.header import render_page_header
 from utils.api_client import APIClient
 from utils.style_loader import apply_custom_styles
+from config import API_BASE_URL
 
 
 st.set_page_config(page_title="Загрузка резюме", page_icon="📄", layout="wide")
@@ -78,9 +79,8 @@ def main():
     )
 
     api_client = APIClient(
-        st.secrets.get("API_BASE_URL", "http://localhost:8000")
+        st.secrets.get("API_BASE_URL", "http://backend:8000")
     )
-
     col1, col2 = st.columns([1, 1])
 
     with col1:

@@ -52,7 +52,7 @@ PAGE_CONFIG = {
 # API НАСТРОЙКИ
 # ============================================================================
 
-API_BASE_URL = get_secret("API_BASE_URL", "http://localhost:8000")
+API_BASE_URL = get_secret("API_BASE_URL", "http://backend:8000")
 API_TIMEOUT = int(get_secret("API_TIMEOUT", "30"))
 API_RETRY_COUNT = int(get_secret("API_RETRY_COUNT", "3"))
 
