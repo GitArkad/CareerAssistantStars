@@ -984,6 +984,34 @@ SOURCE_FALLBACK_URLS = {
     "arbeitnow.com": "https://www.arbeitnow.com",
 }
 
+SOURCE_DEFAULT_PERIOD = {
+    "hh.ru": "month",
+    "adzuna.com": "year",
+    "usajobs.gov": "year",
+    "himalayas.app": "year",
+    "greenhouse.com": "year",
+    "lever.co": "year",
+    "ashbyhq.com": "year",
+    "arbeitnow.com": "year",
+}
+
+SALARY_NEGATIVE_CONTEXT = [
+    # Benefits / perks
+    r"\bgym\b", r"\bfood\b", r"\bmeal\b", r"\bsnack\b", r"\blunch\b",
+    r"\ballowance\b", r"\bstipend\b", r"\bwellness\b",
+    r"\bequipment\b", r"\bhome.?office\b", r"\bco.?working\b",
+    r"\breimburs", r"\bcredit\b", r"\bperks?\b",
+    r"\binsurance\b", r"\bdental\b", r"\bvision\b",
+    r"\bsubsid", r"\bgift\b",
+    # Business metrics
+    r"\bacv\b", r"\barr\b", r"\bmrr\b", r"\brevenue\b", r"\bvaluation\b",
+    r"\bfunding\b", r"\braised\b", r"\bcapital\b", r"\bseries\s+[a-d]\b",
+    r"\bcustomers?\b", r"\busers?\b", r"\bemployees?\b",
+    r"\bcountries\b", r"\boffices\b", r"\bfounded\b",
+    r"\btransaction", r"\bcontract.?value\b", r"\bdeal\s+size\b",
+    r"\bdiscount\b", r"\bfee\b",
+]
+
 COUNTRY_DEFAULT_CURRENCY = {
     "UNITED STATES": "USD",
     "CANADA": "CAD",
@@ -1607,7 +1635,7 @@ def _monthly_fit_score(monthly_amount: float, currency: str) -> float:
 
 # Выбирает наиболее вероятный период зарплаты
 def _choose_best_period(amount: float, currency: str, period_hint: Optional[str]) -> str:
-    candidates = ["hour", "day", "week", "month", "year"]
+    candidates = ["month", "year", "week", "day", "hour"]
 
     best_period = "month"
     best_score = float("inf")
@@ -2602,9 +2630,9 @@ def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
         period = _extract_period_hint(txt)
 
         salary_context_markers = [
-            "salary", "compensation", "pay", "base pay", "base salary",
-            "annual salary", "monthly salary", "hourly rate", "rate",
-            "ote", "per year", "per month", "per hour",
+            "salary", "compensation", "pay range", "salary range", "base pay", "base salary",
+            "annual salary", "monthly salary", "hourly rate", "pay rate",
+            "ote", "per year", "per month", "per hour", "per annum",
             "зарплата", "оклад", "оплата", "компенсация", "доход"
         ]
 
@@ -2621,9 +2649,13 @@ def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
                 raw_salary_text = m.group(0)
 
                 start, end = m.span()
-                window = txt[max(0, start - 100): min(len(txt), end + 100)].lower()
+                window = txt[max(0, start - 50): min(len(txt), end + 50)].lower()
+                near = txt[max(0, start - 40): min(len(txt), end + 40)].lower()
 
                 if not any(marker in window for marker in salary_context_markers):
+                    continue
+
+                if any(re.search(pat, near) for pat in SALARY_NEGATIVE_CONTEXT):
                     continue
 
                 currency = (
@@ -2657,9 +2689,14 @@ def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
         sal_to = row.get("salary_to")
         currency = _normalize_currency_code(row.get("currency"))
         salary_period = row.get("salary_period")
+        source = str(row.get("source") or "").strip().lower()
         desc = str(row.get("description") or "")
 
         salary_text = None
+
+        # Если salary_period не задан — берём дефолт по источнику
+        if _is_missing(salary_period):
+            salary_period = SOURCE_DEFAULT_PERIOD.get(source)
 
         needs_parse = (
         (pd.isna(sal_from) and pd.isna(sal_to))
