@@ -308,7 +308,9 @@ def _build_market_context_from_vacancies(vacancies: list[Dict[str, Any]]) -> Dic
 def _format_roadmap_response(result: Dict[str, Any], scope_label: Optional[str] = None) -> str:
     priorities = result.get("skill_priorities", [])
     if not priorities:
-        return "Изучайте новые технологии в этом направлении."
+        if result.get("error"):
+            return f"Не удалось построить roadmap: {result['error']}"
+        return "Не удалось определить приоритетные навыки по выбранным вакансиям."
 
     lines = ["План развития навыков:"]
     if scope_label:

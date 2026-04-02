@@ -75,10 +75,12 @@ def get_llm_client(model_preset: str = "fast") -> ChatGroq:
 # БЕЗОПАСНЫЙ ЗАПУСК ASYNC ИЗ SYNC-КОНТЕКСТА
 # ═══════════════════════════════════════════════════════════════════════
 
+
 def _run_async_safe(coro):
     """
     Безопасный запуск корутины из синхронного кода.
-    Если event loop уже запущен (FastAPI) — применяет nest_asyncio.
+    Если event loop уже запущен (FastAPI/uvloop), выполняет корутину
+    в отдельном потоке с собственным event loop.
     """
     try:
         loop = asyncio.get_running_loop()
@@ -86,11 +88,27 @@ def _run_async_safe(coro):
         loop = None
 
     if loop and loop.is_running():
-        import nest_asyncio
-        nest_asyncio.apply()
-        return loop.run_until_complete(coro)
-    else:
-        return asyncio.run(coro)
+        import threading
+
+        result_container = {}
+        error_container = {}
+
+        def runner():
+            try:
+                result_container["result"] = asyncio.run(coro)
+            except Exception as e:
+                error_container["error"] = e
+
+        thread = threading.Thread(target=runner, daemon=True)
+        thread.start()
+        thread.join()
+
+        if "error" in error_container:
+            raise error_container["error"]
+
+        return result_container.get("result")
+
+    return asyncio.run(coro)
 
 
 def _format_salary_rub(vacancy: Dict[str, Any]) -> str:
