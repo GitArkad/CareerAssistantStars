@@ -6,8 +6,9 @@ from sqlalchemy import create_engine, inspect, text
 
 from utils.style_loader import apply_custom_styles
 
-apply_custom_styles()
+
 st.set_page_config(page_title="Аналитика рынка", page_icon="📊", layout="wide")
+apply_custom_styles()
 
 st.markdown("""
 <style>

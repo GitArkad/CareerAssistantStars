@@ -9,10 +9,9 @@ from config import API_BASE_URL
 from utils.api_client import APIClient
 from app.utils.style_loader import apply_custom_styles
 
-apply_custom_styles()
-
 st.set_page_config(page_title="Карьерный чат", page_icon="💬", layout="wide")
 st.title("💬 Карьерный чат")
+apply_custom_styles()
 
 api_client = APIClient(API_BASE_URL)
 

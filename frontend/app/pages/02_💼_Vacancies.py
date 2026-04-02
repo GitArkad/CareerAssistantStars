@@ -10,8 +10,9 @@ from utils.style_loader import apply_custom_styles
 from datetime import date, datetime
 import math
 
-apply_custom_styles()
+
 st.set_page_config(page_title="Вакансии", page_icon="💼", layout="wide")
+apply_custom_styles()
 
 st.markdown("""
 <style>

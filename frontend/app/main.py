@@ -6,8 +6,8 @@ from styles import get_custom_css
 from utils.api_client import APIClient
 from utils.style_loader import apply_custom_styles
 
-apply_custom_styles()
 st.set_page_config(**PAGE_CONFIG)
+apply_custom_styles()
 st.markdown(get_custom_css(), unsafe_allow_html=True)
 
 api_client = APIClient(API_BASE_URL)

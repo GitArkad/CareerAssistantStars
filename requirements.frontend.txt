@@ -1,8 +1,13 @@
-# --- Frontend UI ---
 streamlit==1.32.0
 plotly==5.19.0
 pandas==2.2.1
-
-# --- API / Config ---
 requests==2.31.0
 python-dotenv==1.0.1
+streamlit-pdf-viewer==0.0.19
+streamlit-chat==0.1.1
+streamlit-antd-components==0.3.0
+streamlit-lottie==0.0.5
+requests==2.31.0
+python-dotenv==1.0.1
+SQLAlchemy==2.0.28
+psycopg2-binary==2.9.9

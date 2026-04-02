@@ -9,9 +9,9 @@ from components.header import render_page_header
 from utils.api_client import APIClient
 from utils.style_loader import apply_custom_styles
 
-apply_custom_styles()
-st.set_page_config(page_title="Загрузка резюме", page_icon="📄", layout="wide")
 
+st.set_page_config(page_title="Загрузка резюме", page_icon="📄", layout="wide")
+apply_custom_styles()
 
 def _get_backend_candidate() -> Dict[str, Any]:
     backend_state = st.session_state.get("backend_state", {}) or {}
