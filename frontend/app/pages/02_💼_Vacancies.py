@@ -274,7 +274,7 @@ def go_to_chat_with_selected_vacancy(vacancy: dict):
             "content": f"Выбрана вакансия: {title}. Теперь можно запросить fit analysis, roadmap или interview."
         },
     ]
-    st.switch_page("pages/04_🎯_Interview_Simulator.py")
+    st.switch_page("pages/04_🎯_Chat.py")
 
 def go_to_chat_with_fit_seed(vacancy: dict, profile: dict | None = None):
     push_selected_vacancy_to_state(vacancy, profile)
@@ -291,7 +291,7 @@ def go_to_chat_with_fit_seed(vacancy: dict, profile: dict | None = None):
         },
     ]
 
-    st.switch_page("pages/04_🎯_Interview_Simulator.py")
+    st.switch_page("pages/04_🎯_Chat.py")
 
 def main():
     profile = st.session_state.get("candidate_profile", {})
@@ -389,7 +389,7 @@ def main():
     top_col1, top_col2 = st.columns(2)
     with top_col1:
         if st.button("🤖 Перейти в карьерный чат", use_container_width=True):
-            st.switch_page("pages/04_🎯_Interview_Simulator.py")
+            st.switch_page("pages/04_🎯_Chat.py")
     with top_col2:
         if st.button("📄 Перейти к резюме", use_container_width=True):
             st.switch_page("pages/01_📄_Resume_Upload.py")
@@ -427,7 +427,7 @@ def main():
                             {"role": "user", "content": f"roadmap по вакансии: {vacancy.get('title', 'Без названия')}"},
                             {"role": "assistant", "content": result.get("response", "Нет ответа от backend")},
                         ]
-                        st.switch_page("pages/04_🎯_Interview_Simulator.py")
+                        st.switch_page("pages/04_🎯_Chat.py")
                     except Exception as e:
                         st.error(f"Ошибка roadmap: {e}")
 
@@ -446,7 +446,7 @@ def main():
                             {"role": "user", "content": f"interview по вакансии: {vacancy.get('title', 'Без названия')}"},
                             {"role": "assistant", "content": result.get("response", "Нет ответа от backend")},
                         ]
-                        st.switch_page("pages/04_🎯_Interview_Simulator.py")
+                        st.switch_page("pages/04_🎯_Chat.py")
                     except Exception as e:
                         st.error(f"Ошибка interview: {e}")
 
@@ -465,7 +465,7 @@ def main():
                             {"role": "user", "content": f"fit analysis по вакансии: {vacancy.get('title', 'Без названия')}"},
                             {"role": "assistant", "content": result.get("response", "Нет ответа от backend")},
                         ]
-                        st.switch_page("pages/04_🎯_Interview_Simulator.py")
+                        st.switch_page("pages/04_🎯_Chat.py")
                     except Exception as e:
                         st.error(f"Ошибка fit analysis: {e}")
 

@@ -1,80 +1,66 @@
-from fastapi import APIRouter, UploadFile, File, HTTPException
-import os
-import shutil
+from pathlib import Path
+from typing import Any, Dict
+
+from fastapi import APIRouter, File, HTTPException, UploadFile
+
+from app.agents6_2.resume_parser import parse_resume_from_pdf, parse_resume_from_text
+from app.agents6_2.state import CandidateProfile
 
 router = APIRouter()
 
-UPLOAD_DIR = "data/resumes"
+
+def _normalize_candidate_payload(profile: Dict[str, Any]) -> Dict[str, Any]:
+    try:
+        candidate = CandidateProfile(
+            **{k: v for k, v in profile.items() if k in CandidateProfile.model_fields}
+        )
+        return candidate.model_dump()
+    except Exception:
+        fallback = CandidateProfile()
+        candidate_data = fallback.model_dump()
+        candidate_data.update({k: v for k, v in profile.items() if k in candidate_data})
+        return candidate_data
 
 
-# ================================
-# ВРЕМЕННАЯ ФУНКЦИЯ ПАРСИНГА РЕЗЮМЕ
-# ================================
-# Сейчас это заглушка.
-# Потом сюда можно будет подключить:
-# - парсер PDF/DOCX
-# - LangGraph
-# - отдельный resume parser service
-def extract_profile_from_resume(file_path: str) -> dict:
-    """
-    Временная заглушка для извлечения профиля кандидата из резюме.
-    Пока возвращает тестовый профиль.
-    """
-
-    return {
-        "name": "Danila",
-        "country": "Netherlands",
-        "city": "Amsterdam",
-        "relocation": True,
-        "grade": "Middle",
-        "specialization": "Backend Developer",
-        "experience_years": 3,
-        "desired_salary": 4000,
-        "work_format": ["remote", "hybrid"],
-        "foreign_languages": ["English", "Russian"],
-        "skills": ["Python", "FastAPI", "PostgreSQL"]
-    }
-
-
-# ================================
-# ЗАГРУЗКА РЕЗЮМЕ
-# ================================
-# Что делает этот endpoint:
-# 1. принимает файл
-# 2. временно сохраняет его
-# 3. извлекает structured profile
-# 4. удаляет файл
-# 5. возвращает профиль фронту
 @router.post("/upload")
-def upload_resume(file: UploadFile = File(...)):
+async def upload_resume(file: UploadFile = File(...)):
     """
     Загружает резюме, извлекает профиль кандидата
-    и возвращает его без постоянного хранения.
+    и возвращает его вместе с backend state.
     """
-
-    os.makedirs(UPLOAD_DIR, exist_ok=True)
-
-    file_path = os.path.join(UPLOAD_DIR, file.filename)
-
     try:
-        # 1. сохраняем файл временно
-        with open(file_path, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
+        file_bytes = await file.read()
+        if not file_bytes:
+            raise HTTPException(status_code=400, detail="Файл пустой")
 
-        # 2. извлекаем профиль
-        profile = extract_profile_from_resume(file_path)
+        suffix = Path(file.filename or "").suffix.lower()
 
-        # 3. возвращаем structured profile
+        if suffix == ".pdf" or file.content_type == "application/pdf":
+            profile = await parse_resume_from_pdf(file_bytes)
+        elif suffix in {".txt", ".md"} or (file.content_type or "").startswith("text/"):
+            text = file_bytes.decode("utf-8", errors="ignore")
+            profile = await parse_resume_from_text(text)
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail="Поддерживаются только PDF и текстовые файлы для анализа резюме.",
+            )
+
+        candidate = _normalize_candidate_payload(profile or {})
+        state = {
+            "candidate": candidate,
+            "candidate_resume": "",
+            "thread_id": None,
+        }
+
         return {
             "status": "uploaded",
             "filename": file.filename,
-            "profile": profile
+            "profile": candidate,
+            "state": state,
         }
 
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Ошибка обработки резюме: {str(e)}")
-
-    finally:
-        # 4. удаляем временный файл
-        if os.path.exists(file_path):
-            os.remove(file_path)

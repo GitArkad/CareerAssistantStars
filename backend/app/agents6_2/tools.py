@@ -297,8 +297,15 @@ class VacancySearchTool:
                         skill_stats[key] = {"count": 0, "salaries": [], "grades": [], "titles": []}
                     skill_stats[key]["count"] += 1
 
-                    salary = vac.get("salary_from") or vac.get("salary_to")
-                    if salary:
+                    salary_from, salary_to = _get_salary_bounds_rub(vac)
+                    salary = None
+                    if salary_from is not None and salary_to is not None:
+                        salary = (salary_from + salary_to) / 2
+                    elif salary_from is not None:
+                        salary = salary_from * 1.2
+                    elif salary_to is not None:
+                        salary = salary_to * 0.8
+                    if salary is not None:
                         skill_stats[key]["salaries"].append(salary)
                     if vac.get("grade"):
                         skill_stats[key]["grades"].append(vac["grade"])

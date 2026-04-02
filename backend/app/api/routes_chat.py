@@ -1,5 +1,6 @@
 import json
 import logging
+import re
 import uuid
 from typing import Any, Dict, Optional
 
@@ -28,6 +29,7 @@ from app.agents6_2.services.resume_adapter import (
 )
 from app.agents6_2.state import CandidateProfile
 from app.agents6_2.utils.pdf_parser import parse_pdf
+from app.agents6_2.utils.skill_normalizer import extract_skills_from_text, normalize_skills
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -128,7 +130,7 @@ def _build_initial_state(
 
 
 def _restore_state(input_state: Dict[str, Any], stored_state: Dict[str, Any]) -> Dict[str, Any]:
-    for key in ["market_context", "interview", "candidate", "skills_gap", "top_vacancies"]:
+    for key in ["market_context", "interview", "candidate", "skills_gap", "top_vacancies", "selected_vacancy"]:
         if stored_state.get(key) and not input_state.get(key):
             input_state[key] = stored_state[key]
     return input_state
@@ -161,6 +163,7 @@ def _build_state_payload(thread_id: str, result_dict: Dict[str, Any], fallback_s
         "skills_gap": skills_gap,
         "candidate": candidate,
         "interview": interview,
+        "selected_vacancy": result_dict.get("selected_vacancy") or fallback_state.get("selected_vacancy"),
     }
 
 
@@ -180,6 +183,44 @@ def _is_roadmap_request(message: Optional[str]) -> bool:
     return any(keyword in message_lower for keyword in keywords)
 
 
+def _is_specific_vacancy_roadmap_request(message: Optional[str]) -> bool:
+    if not message:
+        return False
+    message_lower = message.lower()
+    specific_keywords = [
+        "по конкретной вакансии",
+        "по этой вакансии",
+        "по выбранной вакансии",
+        "по вакансии",
+        "для этой вакансии",
+        "для выбранной вакансии",
+    ]
+    return any(keyword in message_lower for keyword in specific_keywords)
+
+
+def _extract_vacancy_index_from_message(message: Optional[str]) -> Optional[int]:
+    if not message:
+        return None
+
+    patterns = [
+        r"ваканси(?:я|и)\s*(\d+)",
+        r"вакансии\s*#?\s*(\d+)",
+        r"позици(?:я|и)\s*(\d+)",
+        r"номер\s*(\d+)",
+    ]
+
+    for pattern in patterns:
+        match = re.search(pattern, message.lower())
+        if match:
+            try:
+                index = int(match.group(1))
+            except ValueError:
+                return None
+            return index if index > 0 else None
+
+    return None
+
+
 def _extract_candidate_skills(current_state: Dict[str, Any]) -> list[str]:
     candidate = current_state.get("candidate") or {}
     if hasattr(candidate, "model_dump"):
@@ -194,12 +235,85 @@ def _extract_candidate_skills(current_state: Dict[str, Any]) -> list[str]:
     return []
 
 
-def _format_roadmap_response(result: Dict[str, Any]) -> str:
+def _build_market_context_from_vacancies(vacancies: list[Dict[str, Any]]) -> Dict[str, Any]:
+    if not vacancies:
+        return {
+            "match_score": 0,
+            "skill_gaps": [],
+            "top_vacancies": [],
+            "salary_median": 0,
+            "salary_top_10": 0,
+            "market_range": [0, 0],
+        }
+
+    salaries = []
+    skills = set()
+    enriched_vacancies = []
+    for vacancy in vacancies:
+        vacancy_copy = dict(vacancy)
+        vacancy_skills = vacancy_copy.get("skills") or vacancy_copy.get("requirements") or []
+        if isinstance(vacancy_skills, str):
+            vacancy_skills = [skill.strip() for skill in vacancy_skills.split(",") if skill.strip()]
+        explicit_skills = vacancy_skills if isinstance(vacancy_skills, list) else []
+
+        extracted_skills = []
+        text_parts = [
+            vacancy_copy.get("title"),
+            vacancy_copy.get("specialization"),
+            vacancy_copy.get("description"),
+            vacancy_copy.get("document"),
+        ]
+        for text in text_parts:
+            if isinstance(text, str) and text.strip():
+                extracted_skills.extend(extract_skills_from_text(text))
+
+        merged_skills = normalize_skills(explicit_skills + extracted_skills)
+        merged_lower = {skill.lower() for skill in merged_skills if isinstance(skill, str)}
+        if "apache kafka" in merged_lower:
+            merged_skills = [
+                skill for skill in merged_skills
+                if not (isinstance(skill, str) and skill.lower() == "apache")
+            ]
+        vacancy_copy["skills"] = merged_skills
+
+        for skill in merged_skills:
+            if isinstance(skill, str) and skill.strip():
+                skills.add(skill)
+
+        salary_from = vacancy_copy.get("salary_from_rub", vacancy_copy.get("salary_from"))
+        salary_to = vacancy_copy.get("salary_to_rub", vacancy_copy.get("salary_to"))
+        if salary_from is not None and salary_to is not None:
+            salaries.append((salary_from + salary_to) / 2)
+        elif salary_from is not None:
+            salaries.append(salary_from * 1.2)
+        elif salary_to is not None:
+            salaries.append(salary_to * 0.8)
+
+        enriched_vacancies.append(vacancy_copy)
+
+    salary_median = int(sorted(salaries)[len(salaries) // 2]) if salaries else 0
+    salary_top_10 = int(max(salaries)) if salaries else 0
+    market_range = [int(min(salaries)), int(max(salaries))] if salaries else [0, 0]
+
+    return {
+        "match_score": 0,
+        "skill_gaps": sorted(skills),
+        "top_vacancies": enriched_vacancies,
+        "salary_median": salary_median,
+        "salary_top_10": salary_top_10,
+        "market_range": market_range,
+    }
+
+
+def _format_roadmap_response(result: Dict[str, Any], scope_label: Optional[str] = None) -> str:
     priorities = result.get("skill_priorities", [])
     if not priorities:
-        return "Не удалось построить roadmap по текущим данным. Попробуйте сначала обновить поиск вакансий."
+        return "Изучайте новые технологии в этом направлении."
 
-    lines = ["План развития навыков:\n"]
+    lines = ["План развития навыков:"]
+    if scope_label:
+        lines.append(scope_label)
+    lines.append("")
     for item in priorities[:5]:
         skill = item.get("skill", "Навык")
         demand = item.get("market_demand", 0)
@@ -362,33 +476,73 @@ async def chat(
         if message and _is_roadmap_request(message):
             market_context = current_state.get("market_context") or {}
             top_vacancies = market_context.get("top_vacancies", []) if isinstance(market_context, dict) else []
-            if not top_vacancies:
-                return {
-                    "response": "Сейчас нет сохранённых вакансий для построения roadmap. Сначала выполните поиск вакансий с тем же thread_id, потом повторите запрос.",
-                    "thread_id": thread_id,
-                    "state": current_state,
-                    "history": current_state.get("history", []),
-                    "action": "roadmap",
-                    "stage": "waiting_market_context",
-                }
+            selected_vacancy = current_state.get("selected_vacancy")
+            vacancy_index = _extract_vacancy_index_from_message(message)
+            specific_roadmap = _is_specific_vacancy_roadmap_request(message) or vacancy_index is not None
+
+            roadmap_vacancies: list[Dict[str, Any]] = []
+            scope_label = None
+
+            if specific_roadmap:
+                if vacancy_index is not None:
+                    if not top_vacancies or vacancy_index > len(top_vacancies):
+                        return {
+                            "response": f"Не удалось найти вакансию №{vacancy_index} в последнем списке. Сначала выведите список вакансий и выберите номер из него.",
+                            "thread_id": thread_id,
+                            "state": current_state,
+                            "history": current_state.get("history", []),
+                            "action": "roadmap",
+                            "stage": "waiting_selected_vacancy",
+                        }
+                    selected_vacancy = top_vacancies[vacancy_index - 1]
+                if not isinstance(selected_vacancy, dict):
+                    return {
+                        "response": "Для плана обучения по конкретной вакансии сначала выберите вакансию на странице вакансий или передайте selected_vacancy в состояние чата.",
+                        "thread_id": thread_id,
+                        "state": current_state,
+                        "history": current_state.get("history", []),
+                        "action": "roadmap",
+                        "stage": "waiting_selected_vacancy",
+                    }
+                roadmap_vacancies = [selected_vacancy]
+                vacancy_title = selected_vacancy.get("title", "выбранной вакансии")
+                scope_label = f"Основано на выбранной вакансии: {vacancy_title}"
+            else:
+                if not top_vacancies:
+                    return {
+                        "response": "Сейчас нет сохранённых вакансий для построения roadmap. Сначала выполните поиск вакансий с тем же thread_id, потом повторите запрос.",
+                        "thread_id": thread_id,
+                        "state": current_state,
+                        "history": current_state.get("history", []),
+                        "action": "roadmap",
+                        "stage": "waiting_market_context",
+                    }
+                roadmap_vacancies = top_vacancies
+                scope_label = f"Основано на топ-{len(roadmap_vacancies)} найденных вакансиях"
 
             candidate_skills = _extract_candidate_skills(current_state)
             candidate = current_state.get("candidate") or {}
             if hasattr(candidate, "model_dump"):
                 candidate = candidate.model_dump()
             target_role = candidate.get("specialization") if isinstance(candidate, dict) else None
+            if not target_role and roadmap_vacancies:
+                target_role = roadmap_vacancies[0].get("title")
+
+            roadmap_market_context = _build_market_context_from_vacancies(roadmap_vacancies)
 
             roadmap_result = generate_roadmap_func(
                 current_skills=candidate_skills,
-                market_context=market_context,
+                market_context=roadmap_market_context,
                 target_role=target_role,
                 timeframe_months=6,
             )
-            response_message = _format_roadmap_response(roadmap_result)
+            response_message = _format_roadmap_response(roadmap_result, scope_label=scope_label)
 
             state_payload = dict(current_state)
             state_payload["thread_id"] = thread_id
             state_payload["roadmap"] = roadmap_result
+            if isinstance(selected_vacancy, dict) and specific_roadmap:
+                state_payload["selected_vacancy"] = selected_vacancy
             history = list(current_state.get("history", []))
             history.append({"user": message, "assistant": response_message})
             state_payload["history"] = history[-10:]

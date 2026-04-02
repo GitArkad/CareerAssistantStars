@@ -1,14 +1,15 @@
 """
-Клиент для взаимодействия с FastAPI backend
+Клиент для взаимодействия с FastAPI backend.
 """
 
 import json
+from typing import Any, Dict, List, Optional
+
 import requests
-from typing import Dict, List, Optional, Any
 
 
 class APIClient:
-    """Клиент для работы с backend API"""
+    """Клиент для работы с backend API."""
 
     def __init__(self, base_url: str, timeout: int = 30):
         self.base_url = base_url.rstrip("/")
@@ -16,7 +17,6 @@ class APIClient:
         self.session = requests.Session()
 
     def check_health(self) -> bool:
-        """Проверить доступность API"""
         try:
             response = self.session.get(
                 f"{self.base_url}/health",
@@ -26,14 +26,7 @@ class APIClient:
         except Exception:
             return False
 
-    # =========================================
-    # RESUME
-    # =========================================
     def upload_resume(self, uploaded_file) -> Dict[str, Any]:
-        """
-        Отправить резюме в FastAPI.
-        FastAPI вернёт structured profile.
-        """
         files = {
             "file": (
                 uploaded_file.name,
@@ -51,9 +44,6 @@ class APIClient:
         return response.json()
 
     def analyze_resume_profile(self, profile: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Отправить structured profile в analysis endpoint.
-        """
         response = self.session.post(
             f"{self.base_url}/api/v1/analysis/resume",
             json=profile,
@@ -62,28 +52,21 @@ class APIClient:
         response.raise_for_status()
         return response.json()
 
-    # =========================================
-    # CHAT / MVP FLOW
-    # =========================================
     def chat(
         self,
         message: str = "",
         uploaded_file=None,
         state: Optional[Dict[str, Any]] = None,
+        thread_id: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """
-        Универсальный chat endpoint для MVP flow:
-        - search
-        - resume
-        - roadmap
-        - interview
-        """
         state = state or {}
 
         data = {
             "message": message,
             "state": json.dumps(state, ensure_ascii=False),
         }
+        if thread_id:
+            data["thread_id"] = thread_id
 
         files = None
         if uploaded_file is not None:
@@ -104,9 +87,6 @@ class APIClient:
         response.raise_for_status()
         return response.json()
 
-    # =========================================
-    # JOBS
-    # =========================================
     def get_jobs(
         self,
         country: Optional[str] = None,
@@ -140,9 +120,6 @@ class APIClient:
         response.raise_for_status()
         return response.json()
 
-    # =========================================
-    # ANALYTICS
-    # =========================================
     def get_salary_analytics(
         self,
         role: Optional[str] = None,
@@ -188,21 +165,5 @@ class APIClient:
             params=params,
             timeout=self.timeout,
         )
-        response.raise_for_status()
-        return response.json()
-    
-    
-    def chat(self, message: str, state: dict):
-        import requests
-
-        response = requests.post(
-            f"{self.base_url}/api/v1/chat",
-            data={
-                "message": message,
-                "state": json.dumps(state, ensure_ascii=False),
-            },
-            timeout=120,
-        )
-
         response.raise_for_status()
         return response.json()

@@ -113,6 +113,24 @@ def _format_salary_rub(vacancy: Dict[str, Any]) -> str:
     return "з/п не указана"
 
 
+def _has_impossible_location(query: Optional[str]) -> bool:
+    if not query:
+        return False
+
+    query_lower = query.lower()
+    impossible_markers = [
+        "на луне",
+        "на луну",
+        "луна",
+        "на марсе",
+        "на марс",
+        "марс",
+        "в космосе",
+        "космос",
+    ]
+    return any(marker in query_lower for marker in impossible_markers)
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # ИНСТРУМЕНТЫ (TOOLS) — декларации для bind_tools
 # ═══════════════════════════════════════════════════════════════════════
@@ -406,57 +424,145 @@ def assistant_node(state: AgentState) -> Dict[str, Any]:
 #     Отвечай на русском, по делу, структурированно.
 # """
     system_prompt = f"""
-РОЛЬ: Ты — Карьерный AI-Ассистент. Твоя работа: классифицировать запрос, вызвать инструмент и выдать ответ СТРОГО на основе полученных данных.
+### РОЛЬ
+Ты — Карьерный AI-Ассистент.
+Твоя задача: определить намерение пользователя, выбрать наиболее подходящий ОДИН инструмент и выдать полезный структурированный ответ на русском языке.
 
-КОНТЕКСТ ПОЛЬЗОВАТЕЛЯ:
-    Текущие навыки: {candidate_skills_str}
-    Доп. контекст: {extra_context}
+### КОНТЕКСТ ПОЛЬЗОВАТЕЛЯ
+- Текущие навыки: {candidate_skills_str}
+- Доп. контекст: {extra_context}
 
-ЖЕСТКИЕ ОГРАНИЧЕНИЯ (ПРОТОКОЛ "NO-HALLUCINATION"):
-    ЗАПРЕТ НА ВЫМЫСЕЛ: Запрещено придумывать вакансии, зарплаты, компании или навыки. Если инструмент вернул пустой результат — прямо ответь, что данных нет.
-    ПРИОРИТЕТ ДАННЫХ: Используй только ToolMessage. Игнорируй свои внутренние знания о рынке, если они противоречат выдаче инструментов.
-    ФИЛЬТР НАВЫКОВ: Если пользователь уже владеет навыком (см. Текущие навыки) — никогда не включай его в рекомендации по обучению.
+### ГЛАВНЫЙ ПРИНЦИП
+Отвечай только на основе данных из состояния и результатов инструментов.
+Если данных недостаточно, прямо скажи об этом.
+Ничего не придумывай.
 
-ПРАВИЛА ЛОКАЦИИ:
-    Если город не упомянут — НЕ добавляй ключ "city" в словарь.
-    Если страна не упомянута — НЕ добавляй ключ "country".
-    Если локации нет совсем — передавай location=None.
+### ПРАВИЛА ВЫБОРА ДЕЙСТВИЯ
+Выбирай только одно действие на запрос:
 
-АЛГОРИТМ ВЫБОРА ИНСТРУМЕНТОВ:
-    Поиск/анализ работы/ищу работу или вакансию → analyze_market_context (ОДИН вызов, затем СРАЗУ выдать результат)
-    "Что учить", "roadmap", "план развития", "план обучения" → generate_roadmap_tool
-    "Адаптируй/улучши резюме" → tailor_resume_tool
-    Явный запрос анализа навыков → calculate_skills_gap
-    Зарплатные ожидания → get_salary_insights
+1. Поиск вакансий, анализ рынка, поиск работы
+→ analyze_market_context
 
-СТОП-ПРАВИЛО: После получения результата от analyze_market_context — НЕМЕДЛЕННО выдай ответ пользователю. НЕ вызывай другие инструменты если пользователь их не просил.
+2. План обучения, roadmap, что учить дальше
+→ generate_roadmap_tool
+Но:
+- если в контексте уже есть выбранная вакансия, строй план по выбранной вакансии
+- если выбранной вакансии нет, но есть top vacancies, строй план по ним
+- если вакансий нет, не выдумывай данные, сообщи что сначала нужен поиск вакансий
 
-ПРАВИЛА ВЫЗОВА ИНСТРУМЕНТОВ:
-- calculate_skills_gap: передавай ТОЛЬКО список названий навыков (из поля skill_gaps или извлеченных из вакансий). 
+3. Улучшение или адаптация резюме
+→ tailor_resume_tool
 
-РЕГЛАМЕНТ ОТВЕТОВ:
-    При выводе вакансий (Макс. 5):
-        [Название должности]
-        Компания: [company] | Локация: [city], [country]
-        Зарплата: [salary_from] — [salary_to] ₽
-        Стек: [skills]
-        Ссылка: [url]
+4. Анализ недостающих навыков
+→ calculate_skills_gap
 
-ОБРАБОТКА РЕЗУЛЬТАТОВ:
-    - Если инструмент поиска (analyze_market_context) вернул 0 вакансий: ответь "К сожалению, по вашему запросу в данной локации вакансий не найдено. Попробуйте расширить поиск".
-    - Если вакансии НАЙДЕНЫ, но список недостающих навыков (skill_gap) пуст, выведи список вакансий.
-    - НИКОГДА не говори, что стек соответствует, если вакансий найдено 0.
+5. Зарплатная аналитика
+→ get_salary_insights
 
-    При адаптации резюме (tailor_resume_tool):
-        Выдели ТОП-5 навыков из вакансии.
-        Проведи аудит (что есть / что слабо).
-        Перепиши достижения по формуле Google: "Сделал [X], что измеряется [Y], внедрением [Z]".
-        Список недостающих ключевых слов.
+6. Подготовка к интервью
+→ если в состоянии уже есть сценарий интервью, продолжай его
+→ если нет данных для интервью, сообщи что нужна вакансия или контекст роли
+Не выдумывай отдельный tool, если он не был реально предоставлен системой.
 
-    При отсутствии разрыва навыков:
-        Если skill_gap пуст, ответь: "Ваш текущий стек полностью соответствует требованиям рынка для найденных вакансий ТОП-5".
+### КРИТИЧЕСКИЕ ОГРАНИЧЕНИЯ
+- Не придумывай вакансии, компании, зарплаты, страны, города или навыки.
+- Используй только то, что пришло из ToolMessage и state.
+- Если инструмент вернул пустой результат, честно скажи, что данных не найдено.
+- Не рекомендуй изучать навыки, которые уже есть у пользователя в "Текущих навыках".
+- Не вызывай второй инструмент, если задача уже может быть завершена на основе текущего state или результата первого инструмента.
+- Если город или страна не были явно указаны пользователем, не добавляй их в аргументы инструмента.
 
-Язык: Русский. Стиль: Лаконичный, профессиональный, структурированный.
+### ПРИОРИТЕТ ИСТОЧНИКОВ ДАННЫХ
+Используй данные в таком порядке:
+1. ToolMessage / результат инструмента
+2. State / extra_context
+3. Никаких догадок сверх этого
+
+### ФОРМАТЫ ОТВЕТА
+
+#### 1. ВАКАНСИИ
+Если вакансии найдены:
+Найдено вакансий: {{N}}
+
+Для каждой вакансии, максимум 5:
+{{title}}
+Компания: {{company}}
+Локация: {{city}}, {{country}}
+Зарплата: {{formatted_salary}}
+Стек: {{skills}}
+Ссылка: {{url}}
+
+Если есть агрегаты:
+Медиана з/п по рынку: {{salary_median}} ₽
+
+Если вакансий нет:
+Вакансий не найдено. Попробуйте изменить запрос, убрать часть фильтров или расширить локацию.
+
+#### 2. ROADMAP
+Если есть данные по вакансии или топ-вакансиям:
+Цель: {{target_role}}
+
+Приоритет навыков:
+- {{skill}}: встречается в {{market_demand}} вакансиях, срок освоения ~{{estimated_weeks}} нед.
+- {{skill}}: встречается в {{market_demand}} вакансиях, срок освоения ~{{estimated_weeks}} нед.
+
+Если есть прогноз:
+Прогноз по зарплате: {{from_salary}} → {{to_salary}} ₽
+
+Итог:
+- Что учить сначала
+- Что учить следующим этапом
+- На какой тип ролей это поможет выйти
+
+Если данных нет:
+Невозможно построить план обучения без вакансий. Сначала выполните поиск вакансий или выберите конкретную вакансию.
+
+#### 3. RESUME
+Целевая позиция: {{title}}
+
+- Что уже хорошо совпадает
+- Что нужно добавить
+- Какие ключевые слова стоит включить
+- Как усилить формулировки опыта
+- Краткий совет по summary
+
+Если данных по вакансии нет:
+Для адаптации резюме нужна выбранная или найденная вакансия.
+
+#### 4. INTERVIEW
+- На что обратить внимание по стеку
+- Какие темы наиболее вероятны
+- Сильные стороны кандидата
+- Зоны риска
+- Краткий совет по подготовке
+
+#### 5. SKILL GAP
+Если данные есть:
+Недостающие навыки:
+- {{skill_1}}
+- {{skill_2}}
+- {{skill_3}}
+
+Если разрывов нет:
+Ваш стек в целом соответствует найденным вакансиям.
+
+Если вакансий нет:
+Недостаточно данных для анализа skill gap.
+
+#### 6. SALARY
+- Медиана по рынку: {{median}} ₽
+- Верхняя граница по найденным вакансиям: {{top_10}} ₽
+- Диапазон: {{range_from}} — {{range_to}} ₽
+
+Если данных нет:
+Недостаточно данных для зарплатной аналитики.
+
+### СТИЛЬ
+- Русский язык
+- Кратко, по делу, структурированно
+- Без воды
+- Без вымысла
+- Ответ должен быть удобен для копирования в заметки
     """
     system_message = SystemMessage(content=system_prompt)
 
@@ -566,82 +672,103 @@ def tools_node(state: AgentState) -> Dict[str, Any]:
             if tool_name == "analyze_market_context":
                 query = tool_args.get("query") or getattr(state, "query", "") or "вакансии"
                 location = tool_args.get("location") or getattr(state, "location", None)
-                # Проверяем: реально ли пользователь упоминал этот город/страну
-                user_query = (getattr(state, "query", "") or "").lower()
-                if location and isinstance(location, dict):
-                    city = location.get("city")
-                    country = location.get("country")
-
-                    def alias_in_query(aliases: list, query: str) -> bool:
-                        for alias in aliases:
-                            if alias in query:
-                                return True
-                            # Проверяем корень (без последних 1-2 букв) для склонений
-                            if len(alias) > 4 and alias[:-1] in query:
-                                return True
-                            if len(alias) > 5 and alias[:-2] in query:
-                                return True
-                        return False
-
-                    city_mentioned = city and alias_in_query(
-                        get_city_aliases(normalize_city(city)), user_query
+                if _has_impossible_location(query):
+                    updates["market_context"] = {
+                        "match_score": 0.0,
+                        "skill_gaps": [],
+                        "top_vacancies": [],
+                        "salary_median": 0,
+                        "salary_top_10": 0,
+                        "market_range": [0, 0],
+                    }
+                    updates["top_vacancies"] = []
+                    updates["agent_response"] = (
+                        "К сожалению, по вашему запросу в указанной локации вакансий не найдено. "
+                        "Попробуйте изменить локацию на реальный город или страну."
                     )
-                    country_mentioned = country and alias_in_query(
-                        get_country_aliases(normalize_country(country)), user_query
-                    )
-                    clean_location = {}
-                    if city_mentioned:
-                        clean_location["city"] = city
-                    if country_mentioned:
-                        clean_location["country"] = country
-                    location = clean_location if clean_location else None
-                    if location != tool_args.get("location"):
-                        logger.info(f"🔍 [tools_node] Локация скорректирована: {tool_args.get('location')} → {location}")
-                if query:
-                    result = analyze_market_context_func(query, location)
-                    updates["market_context"] = result
-                    vacancies = result.get("top_vacancies", []) if result else []
-                    if vacancies:
-                        updates["top_vacancies"] = vacancies
-                    else:
-                        updates["top_vacancies"] = []
-                    logger.info(f"✅ [tools_node] analyze_market_context: {len(vacancies)} вакансий")
-                    # Формируем читаемый ответ и сохраняем для bypass LLM
-                    if vacancies:
-                        lines = [f"Найдено вакансий: {len(vacancies)}\n"]
-                        for i, v in enumerate(vacancies, 1):
-                            salary = _format_salary_rub(v)
-                            skills_str = ", ".join(v.get('skills') or []) or "не указаны"
-                            lines.append(f"**{i}. {v.get('title','?')}**")
-                            lines.append(f"Компания: {v.get('company','?')} | Локация: {v.get('city','?')}")
-                            lines.append(f"Зарплата: {salary}")
-                            lines.append(f"Стек: {skills_str}")
-                            url = v.get('url','')
-                            if url:
-                                lines.append(f"Ссылка: {url}")
-                            lines.append("")
-                        mc_data = updates.get("market_context", {})
-                        if isinstance(mc_data, dict) and mc_data.get("salary_median"):
-                            lines.append(f"Медиана з/п по рынку: {mc_data['salary_median']:,} ₽".replace(",", " "))
-                        formatted = "\n".join(lines)
-                        updates["agent_response"] = formatted
-                        result = f"НАЙДЕНО ВАКАНСИЙ: {len(vacancies)}\n{formatted}"
-                    else:
-                        error_text = result.get("error") if isinstance(result, dict) else None
-                        if error_text:
-                            updates["agent_response"] = (
-                                f"Не удалось выполнить поиск вакансий: {error_text}"
-                            )
+                    result = {
+                        "status": "no_vacancies",
+                        "message": updates["agent_response"],
+                        "top_vacancies": [],
+                    }
+                    logger.info("🚫 [tools_node] Обнаружена невозможная локация в запросе: %s", query)
+                else:
+                    # Проверяем: реально ли пользователь упоминал этот город/страну
+                    user_query = (getattr(state, "query", "") or "").lower()
+                    if location and isinstance(location, dict):
+                        city = location.get("city")
+                        country = location.get("country")
+
+                        def alias_in_query(aliases: list, query: str) -> bool:
+                            for alias in aliases:
+                                if alias in query:
+                                    return True
+                                # Проверяем корень (без последних 1-2 букв) для склонений
+                                if len(alias) > 4 and alias[:-1] in query:
+                                    return True
+                                if len(alias) > 5 and alias[:-2] in query:
+                                    return True
+                            return False
+
+                        city_mentioned = city and alias_in_query(
+                            get_city_aliases(normalize_city(city)), user_query
+                        )
+                        country_mentioned = country and alias_in_query(
+                            get_country_aliases(normalize_country(country)), user_query
+                        )
+                        clean_location = {}
+                        if city_mentioned:
+                            clean_location["city"] = city
+                        if country_mentioned:
+                            clean_location["country"] = country
+                        location = clean_location if clean_location else None
+                        if location != tool_args.get("location"):
+                            logger.info(f"🔍 [tools_node] Локация скорректирована: {tool_args.get('location')} → {location}")
+                    if query:
+                        result = analyze_market_context_func(query, location)
+                        updates["market_context"] = result
+                        vacancies = result.get("top_vacancies", []) if result else []
+                        if vacancies:
+                            updates["top_vacancies"] = vacancies
                         else:
-                            updates["agent_response"] = (
-                                "К сожалению, по вашему запросу в данной локации вакансий не найдено. "
-                                "Попробуйте расширить поиск, изменить роль или убрать фильтр по городу."
-                            )
-                        result = {
-                            "status": "no_vacancies",
-                            "message": updates["agent_response"],
-                            "top_vacancies": [],
-                        }
+                            updates["top_vacancies"] = []
+                        logger.info(f"✅ [tools_node] analyze_market_context: {len(vacancies)} вакансий")
+                        # Формируем читаемый ответ и сохраняем для bypass LLM
+                        if vacancies:
+                            lines = [f"Найдено вакансий: {len(vacancies)}\n"]
+                            for i, v in enumerate(vacancies, 1):
+                                salary = _format_salary_rub(v)
+                                skills_str = ", ".join(v.get('skills') or []) or "не указаны"
+                                lines.append(f"**{i}. {v.get('title','?')}**")
+                                lines.append(f"Компания: {v.get('company','?')} | Локация: {v.get('city','?')}")
+                                lines.append(f"Зарплата: {salary}")
+                                lines.append(f"Стек: {skills_str}")
+                                url = v.get('url','')
+                                if url:
+                                    lines.append(f"Ссылка: {url}")
+                                lines.append("")
+                            mc_data = updates.get("market_context", {})
+                            if isinstance(mc_data, dict) and mc_data.get("salary_median"):
+                                lines.append(f"Медиана з/п по рынку: {mc_data['salary_median']:,} ₽".replace(",", " "))
+                            formatted = "\n".join(lines)
+                            updates["agent_response"] = formatted
+                            result = f"НАЙДЕНО ВАКАНСИЙ: {len(vacancies)}\n{formatted}"
+                        else:
+                            error_text = result.get("error") if isinstance(result, dict) else None
+                            if error_text:
+                                updates["agent_response"] = (
+                                    f"Не удалось выполнить поиск вакансий: {error_text}"
+                                )
+                            else:
+                                updates["agent_response"] = (
+                                    "К сожалению, по вашему запросу в данной локации вакансий не найдено. "
+                                    "Попробуйте расширить поиск, изменить роль или убрать фильтр по городу."
+                                )
+                            result = {
+                                "status": "no_vacancies",
+                                "message": updates["agent_response"],
+                                "top_vacancies": [],
+                            }
 
             # ──────────────────────────────────────────
             # 2. РАСЧЁТ SKILL GAP

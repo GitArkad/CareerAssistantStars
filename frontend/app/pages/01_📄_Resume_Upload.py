@@ -3,6 +3,7 @@ from streamlit_pdf_viewer import pdf_viewer
 import tempfile
 import os
 from pathlib import Path
+from typing import Any, Dict
 
 from components.header import render_page_header
 from utils.api_client import APIClient
@@ -10,6 +11,55 @@ from utils.style_loader import apply_custom_styles
 
 apply_custom_styles()
 st.set_page_config(page_title="Загрузка резюме", page_icon="📄", layout="wide")
+
+
+def _get_backend_candidate() -> Dict[str, Any]:
+    backend_state = st.session_state.get("backend_state", {}) or {}
+    candidate = backend_state.get("candidate")
+    return candidate if isinstance(candidate, dict) else {}
+
+
+def _render_candidate_analysis(profile: Dict[str, Any], source_label: str):
+    desired_salary = profile.get("desired_salary")
+    desired_salary_display = desired_salary if desired_salary not in (None, 0, "", "0") else "Не указано"
+
+    st.caption(source_label)
+    st.markdown("### 👤 Профиль кандидата")
+
+    st.write(f"**Имя:** {profile.get('name', '-')}")
+    st.write(f"**Страна:** {profile.get('country', '-')}")
+    st.write(f"**Город:** {profile.get('city', '-')}")
+    st.write(f"**Грейд:** {profile.get('grade', '-')}")
+    st.write(f"**Специализация:** {profile.get('specialization', '-')}")
+    st.write(f"**Опыт:** {profile.get('experience_years', '-')} лет")
+    st.write(f"**Желаемая зарплата:** {desired_salary_display}")
+    st.write(f"**Релокация:** {'Да' if profile.get('relocation') else 'Нет'}")
+
+
+    st.markdown("### 🏢 Формат работы")
+    work_format = profile.get("work_format", [])
+    if work_format:
+        for item in work_format:
+            st.markdown(f"- {item}")
+    else:
+        st.markdown("Не указан")
+
+
+    st.markdown("### 💡 Навыки")
+    skills = profile.get("skills", [])
+    if skills:
+        for skill in skills:
+            st.markdown(f"- {skill}")
+    else:
+        st.info("Навыки не найдены")
+    
+    st.markdown("### 🌍 Языки")
+    langs = profile.get("foreign_languages", [])
+    if langs:
+        for lang in langs:
+            st.markdown(f"- {lang}")
+    else:
+        st.info("Не указаны")
 
 
 def main():
@@ -111,51 +161,20 @@ def main():
             with nav_col2:
                 if st.button("🤖 Открыть карьерный чат", use_container_width=True, key="go_to_chat"):
                     st.session_state.show_analysis = False
-                    st.switch_page("pages/04_🎯_Interview_Simulator.py")
+                    st.switch_page("pages/04_🎯_Chat.py")
 
     with col2:
         st.markdown("### Результаты анализа")
 
-        profile = st.session_state.candidate_profile
+        backend_profile = _get_backend_candidate()
+        profile = backend_profile or st.session_state.candidate_profile
 
-        if profile and st.session_state.get("show_analysis", False):
-            st.markdown("### 👤 Профиль кандидата")
-
-            st.write(f"**Имя:** {profile.get('name', '-')}")
-            st.write(f"**Страна:** {profile.get('country', '-')}")
-            st.write(f"**Город:** {profile.get('city', '-')}")
-            st.write(f"**Грейд:** {profile.get('grade', '-')}")
-            st.write(f"**Специализация:** {profile.get('specialization', '-')}")
-            st.write(f"**Опыт:** {profile.get('experience_years', '-')} лет")
-            st.write(f"**Желаемая зарплата:** {profile.get('desired_salary', '-')}")
-            st.write(f"**Релокация:** {'Да' if profile.get('relocation') else 'Нет'}")
-
-            st.markdown("### 🏢 Формат работы")
-            work_format = profile.get("work_format", [])
-            if work_format:
-                for item in work_format:
-                    st.markdown(f"- {item}")
-            else:
-                st.info("Не указан")
-
-            st.markdown("### 🌍 Языки")
-            langs = profile.get("foreign_languages", [])
-            if langs:
-                for lang in langs:
-                    st.markdown(f"- {lang}")
-            else:
-                st.info("Не указаны")
-
-            st.markdown("### 💡 Навыки")
-            skills = profile.get("skills", [])
-            if skills:
-                for skill in skills:
-                    st.markdown(f"- {skill}")
-            else:
-                st.info("Навыки не найдены")
+        if profile:
+            source_label = "Данные загружены" if backend_profile else "Данные получены после анализа резюме"
+            _render_candidate_analysis(profile, source_label)
 
         else:
-            st.info("Загрузите резюме, чтобы увидеть анализ")
+            st.info("Загрузите резюме, чтобы справа появился профиль кандидата из backend.")
 
 
 if __name__ == "__main__":
