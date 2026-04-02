@@ -1,0 +1,1078 @@
+================================================================================
+CAREER ASSISTANT PRO
+Полное руководство по запуску продакшен-версии
+Версия: 1.0.0
+Последнее обновление: 2024
+================================================================================
+
+================================================================================
+📋 ОГЛАВЛЕНИЕ
+================================================================================
+
+1. 🗂️ Структура проекта
+2. 📦 Установка зависимостей
+3. 🔐 Настройка секретов и переменных окружения
+4. 🎨 Настройка стилей (styles.py)
+5. 🔗 Подключение Qdrant (векторная база)
+6. ⚙️ Подключение Airflow (ETL пайплайны)
+7. 🧠 Подключение LangGraph (оркестрация)
+8. 🔄 Интеграция с FastAPI бэкендом
+9. 🚀 Запуск приложения
+10. 🔧 Устранение неполадок
+11. 📊 Мониторинг и логирование
+
+================================================================================
+1. 🗂️ СТРУКТУРА ПРОЕКТА
+================================================================================
+
+frontend/
+├── styles.py                          # ✅ Глобальные CSS стили
+├── requirements.txt                   # Зависимости Python
+├── .streamlit/
+│   └── secrets.toml                  # Секреты (не коммитить!)
+├── app/
+│   ├── __init__.py
+│   ├── main.py                        # ✅ Точка входа Streamlit
+│   ├── config.py                      # Конфигурация приложения
+│   ├── utils/
+│   │   ├── __init__.py
+│   │   ├── api_client.py             # ✅ Клиент для FastAPI
+│   │   └── style_loader.py           # ✅ Загрузчик стилей
+│   ├── components/
+│   │   ├── __init__.py
+│   │   ├── header.py
+│   │   ├── resume_card.py
+│   │   ├── vacancy_card.py
+│   │   └── charts.py
+│   └── pages/
+│       ├── __init__.py
+│       ├── 01_📄_Resume_Upload.py    # ✅ Страница загрузки резюме
+│       ├── 03_💼_Vacancies.py         # ✅ Страница вакансий
+│       ├── 04_📊_Analytics.py         # ✅ Страница аналитики
+│       └── 05_🎯_Interview_Simulator.py # ✅ Симулятор интервью
+├── backend/
+│   ├── __init__.py
+│   ├── api.py                         # ✅ FastAPI endpoints
+│   ├── langgraph_orchestrator.py     # ✅ LangGraph графы
+│   └── services/
+│       ├── resume_parser.py
+│       ├── vacancy_matcher.py
+│       └── interview_generator.py
+├── pipelines/
+│   └── airflow_etl.py                # ✅ Airflow DAGs
+├── docker/
+│   ├── docker-compose.yml
+│   ├── Dockerfile.streamlit
+│   ├── Dockerfile.fastapi
+│   └── Dockerfile.airflow
+└── docs/
+    └── API.md
+
+================================================================================
+2. 📦 УСТАНОВКА ЗАВИСИМОСТЕЙ
+================================================================================
+
+# 2.1. Создать виртуальное окружение (рекомендуется)
+python -m venv venv
+source venv/bin/activate  # Linux/Mac
+# или
+venv\Scripts\activate  # Windows
+
+# 2.2. Установить зависимости для frontend
+cd frontend
+pip install -r requirements.txt
+
+# 2.3. requirements.txt должен содержать:
+"""
+# Core
+streamlit==1.31.0
+streamlit-antd-components==0.3.0
+plotly==5.18.0
+pandas==2.1.4
+numpy==1.26.0
+requests==2.31.0
+pydantic==2.5.3
+python-dotenv==1.0.0
+
+# LangGraph / LangChain
+langgraph==0.0.29
+langchain==0.1.0
+langchain-openai==0.0.5
+langchain-community==0.0.10
+
+# Vector DB
+qdrant-client==1.7.0
+
+# FastAPI Client
+httpx==0.25.2
+
+# File handling
+PyPDF2==3.0.1
+python-docx==1.1.0
+pdfplumber==0.10.3
+
+# Async
+aiohttp==3.9.1
+
+# For production
+gunicorn==21.2.0
+uvicorn==0.24.0
+"""
+
+# 2.4. Проверить установку
+pip list | grep streamlit
+# Должно показать: streamlit 1.31.0
+
+================================================================================
+3. 🔐 НАСТРОЙКА СЕКРЕТОВ И ПЕРЕМЕННЫХ ОКРУЖЕНИЯ
+================================================================================
+
+# 3.1. Создать файл .streamlit/secrets.toml
+mkdir -p .streamlit
+touch .streamlit/secrets.toml
+
+# 3.2. Содержимое .streamlit/secrets.toml:
+"""
+# === API НАСТРОЙКИ ===
+API_BASE_URL = "http://localhost:8000/api/v1"
+API_TIMEOUT = 30
+API_RETRY_COUNT = 3
+
+# === LLM / LANGGRAPH ===
+OPENAI_API_KEY = "sk-your-openai-key-here"
+ANTHROPIC_API_KEY = "sk-ant-your-key-here"
+LANGGRAPH_ENDPOINT = "http://localhost:8501"
+LLM_MODEL = "gpt-4-turbo"
+LLM_TEMPERATURE = 0.7
+
+# === QDRANT VECTOR DB ===
+QDRANT_URL = "http://localhost:6333"
+QDRANT_API_KEY = ""  # Пусто для локальной установки
+QDRANT_COLLECTION_VACANCIES = "vacancies"
+QDRANT_COLLECTION_RESUMES = "resumes"
+QDRANT_EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
+
+# === DATABASE ===
+DATABASE_URL = "postgresql://user:password@localhost:5432/career_db"
+DATABASE_POOL_SIZE = 10
+DATABASE_MAX_OVERFLOW = 20
+
+# === AIRFLOW ===
+AIRFLOW_URL = "http://localhost:8080"
+AIRFLOW_USERNAME = "admin"
+AIRFLOW_PASSWORD = "admin"
+AIRFLOW_DAG_ID_ETL = "job_market_etl_pipeline"
+
+# === ПРИЛОЖЕНИЕ ===
+APP_ENV = "development"  # development | staging | production
+DEBUG = true
+LOG_LEVEL = "INFO"
+MAX_UPLOAD_SIZE_MB = 10
+
+# === АУТЕНТИФИКАЦИЯ ===
+JWT_SECRET_KEY = "your-super-secret-jwt-key-change-in-production"
+JWT_ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = 30
+"""
+
+# 3.3. Создать .env файл для backend (опционально)
+touch backend/.env
+# Скопировать туда те же переменные для FastAPI
+
+# 3.4. ДОБАВИТЬ В .gitignore:
+"""
+# Secrets
+.streamlit/secrets.toml
+*.env
+!.env.example
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
+
+# Streamlit
+.streamlit/cache/
+*.log
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+"""
+
+================================================================================
+4. 🎨 НАСТРОЙКА СТИЛЕЙ (styles.py)
+================================================================================
+
+# 4.1. Файл styles.py должен содержать ТОЛЬКО валидный CSS:
+
+def get_custom_css() -> str:
+    return """
+    <style>
+    @keyframes gradient-flow {
+        0% { background-position: 0% 50%; }
+        50% { background-position: 100% 50%; }
+        100% { background-position: 0% 50%; }
+    }
+    
+    .stApp {
+        background: linear-gradient(-45deg, #85ACE5, #1148A8, #4A6FA5, #0E3A78);
+        background-size: 400% 400%;
+        animation: gradient-flow 15s ease infinite;
+    }
+    
+    .main, body, .block-container {
+        background: transparent !important;
+    }
+    
+    /* ... остальной валидный CSS ... */
+    </style>
+    """
+
+# ❌ НЕЛЬЗЯ:
+# - Использовать &quot; &gt; &lt; (заменять на " > <)
+# - Добавлять </p> <pre> <code> внутри CSS
+# - Разрывать слова (page-he ader → page-header)
+
+# 4.2. Применять стили на КАЖДОЙ странице:
+
+# В app/utils/style_loader.py:
+import streamlit as st
+from pathlib import Path
+import sys
+
+sys.path.append(str(Path(__file__).parent.parent.parent))
+
+def apply_custom_styles():
+    """Применяет кастомные стили к текущей странице"""
+    try:
+        from styles import get_custom_css
+        st.markdown(get_custom_css(), unsafe_allow_html=True)
+    except Exception as e:
+        st.error(f"❌ Ошибка загрузки стилей: {e}")
+
+# В КАЖДОМ файле страницы (main.py, pages/*.py) ДОБАВИТЬ:
+from utils.style_loader import apply_custom_styles
+apply_custom_styles()  # Вызывать после импортов, до остального кода
+
+================================================================================
+5. 🔗 ПОДКЛЮЧЕНИЕ QDRANT (ВЕКТОРНАЯ БАЗА ДАННЫХ)
+================================================================================
+
+# 5.1. Установка Qdrant локально (для разработки):
+
+# Вариант A: Docker (рекомендуется)
+docker run -p 6333:6333 -p 6334:6334 \
+  -v $(pwd)/qdrant_storage:/qdrant/storage:z \
+  qdrant/qdrant
+
+# Вариант B: pip
+pip install qdrant-client
+
+# 5.2. Создать коллекции в Qdrant:
+
+# backend/services/vector_store.py:
+from qdrant_client import QdrantClient
+from qdrant_client.models import Distance, VectorParams
+
+def init_qdrant_collections():
+    """Инициализация коллекций Qdrant"""
+    client = QdrantClient(
+        url=os.getenv("QDRANT_URL", "http://localhost:6333"),
+        api_key=os.getenv("QDRANT_API_KEY")
+    )
+    
+    # Коллекция для вакансий
+    if not client.collection_exists("vacancies"):
+        client.create_collection(
+            collection_name="vacancies",
+            vectors_config=VectorParams(size=384, distance=Distance.COSINE)
+        )
+    
+    # Коллекция для резюме
+    if not client.collection_exists("resumes"):
+        client.create_collection(
+            collection_name="resumes",
+            vectors_config=VectorParams(size=384, distance=Distance.COSINE)
+        )
+    
+    return client
+
+# 5.3. Интеграция в utils/api_client.py:
+
+class APIClient:
+    def __init__(self, base_url: str):
+        self.base_url = base_url
+        self.qdrant = QdrantClient(
+            url=os.getenv("QDRANT_URL"),
+            api_key=os.getenv("QDRANT_API_KEY")
+        )
+    
+    def search_similar_vacancies(self, resume_embedding: list, limit: int = 10):
+        """Поиск похожих вакансий по эмбеддингу резюме"""
+        results = self.qdrant.search(
+            collection_name="vacancies",
+            query_vector=resume_embedding,
+            limit=limit
+        )
+        return [hit.payload for hit in results]
+    
+    def upsert_resume(self, resume_id: str, embedding: list, metadata: dict):
+        """Сохранить эмбеддинг резюме в Qdrant"""
+        self.qdrant.upsert(
+            collection_name="resumes",
+            points=[{"id": resume_id, "vector": embedding, "payload": metadata}]
+        )
+
+# 5.4. Генерация эмбеддингов:
+
+# backend/services/embedding_service.py:
+from sentence_transformers import SentenceTransformer
+
+class EmbeddingService:
+    def __init__(self, model_name: str = "all-MiniLM-L6-v2"):
+        self.model = SentenceTransformer(model_name)
+    
+    def encode_text(self, text: str) -> list:
+        """Преобразовать текст в векторное представление"""
+        return self.model.encode(text).tolist()
+    
+    def encode_batch(self, texts: list[str]) -> list[list]:
+        """Преобразовать несколько текстов"""
+        return self.model.encode(texts).tolist()
+
+================================================================================
+6. ⚙️ ПОДКЛЮЧЕНИЕ AIRFLOW (ETL ПЛАЙПЛАЙНЫ)
+================================================================================
+
+# 6.1. Установка Airflow:
+
+pip install apache-airflow==2.8.0
+pip install apache-airflow-providers-postgres
+pip install apache-airflow-providers-http
+
+# 6.2. Инициализация Airflow:
+export AIRFLOW_HOME=$(pwd)/airflow
+airflow db init
+airflow users create \
+    --username admin \
+    --firstname Admin \
+    --lastname User \
+    --role Admin \
+    --email admin@example.com
+
+# 6.3. Создать DAG в pipelines/airflow_etl.py:
+
+from airflow import DAG
+from airflow.operators.python import PythonOperator
+from datetime import datetime, timedelta
+import requests
+import pandas as pd
+
+default_args = {
+    'owner': 'career_assistant',
+    'start_date': datetime(2024, 1, 1),
+    'retries': 3,
+    'retry_delay': timedelta(minutes=5),
+}
+
+dag = DAG(
+    'job_market_etl_pipeline',
+    default_args=default_args,
+    schedule_interval='0 6 * * *',  # Ежедневно в 6:00
+    catchup=False,
+)
+
+def scrape_vacancies(**context):
+    """Парсинг вакансий с внешних источников"""
+    # ##############
+    # AIRFLOW PIPELINE PLACEHOLDER
+    # Этот раздел собирает данные о вакансиях:
+    # - hh.ru API
+    # - Adzuna API  
+    # - HeadHunter RSS
+    # ##############
+    
+    vacancies = []
+    
+    # Пример: hh.ru API
+    response = requests.get(
+        "https://api.hh.ru/vacancies",
+        params={'text': 'python developer', 'per_page': 100}
+    )
+    if response.status_code == 200:
+        data = response.json()
+        vacancies.extend(data.get('items', []))
+    
+    # Сохранить в XCom для следующих задач
+    context['task_instance'].xcom_push(key='vacancies', value=vacancies)
+    return len(vacancies)
+
+def process_and_embed(**context):
+    """Обработка и создание эмбеддингов"""
+    vacancies = context['task_instance'].xcom_pull(key='vacancies')
+    
+    # ##############
+    # LANGGRAPH INTEGRATION POINT
+    # Здесь можно вызвать LangGraph для:
+    # - Нормализации данных
+    # - Извлечения навыков
+    # - Генерации эмбеддингов
+    # ##############
+    
+    processed = []
+    for vac in vacancies:
+        processed.append({
+            'id': vac.get('id'),
+            'title': vac.get('name'),
+            'company': vac.get('employer', {}).get('name'),
+            'description': vac.get('description', ''),
+            'skills': extract_skills(vac.get('description', '')),
+            'salary': vac.get('salary', {}),
+            'location': vac.get('area', {}).get('name'),
+        })
+    
+    context['task_instance'].xcom_push(key='processed', value=processed)
+    return len(processed)
+
+def load_to_qdrant(**context):
+    """Загрузка в Qdrant"""
+    processed = context['task_instance'].xcom_pull(key='processed')
+    
+    # ##############
+    # QDRANT INTEGRATION
+    # Загрузка эмбеддингов в векторную базу
+    # ##############
+    
+    from qdrant_client import QdrantClient
+    from backend.services.embedding_service import EmbeddingService
+    
+    client = QdrantClient(url=os.getenv("QDRANT_URL"))
+    embedder = EmbeddingService()
+    
+    for item in processed:
+        embedding = embedder.encode_text(f"{item['title']} {item['description']}")
+        client.upsert(
+            collection_name="vacancies",
+            points=[{
+                "id": str(item['id']),
+                "vector": embedding,
+                "payload": item
+            }]
+        )
+    
+    return "Loaded to Qdrant"
+
+# Определение задач
+scrape_task = PythonOperator(
+    task_id='scrape_vacancies',
+    python_callable=scrape_vacancies,
+    dag=dag,
+)
+
+process_task = PythonOperator(
+    task_id='process_and_embed',
+    python_callable=process_and_embed,
+    dag=dag,
+)
+
+load_task = PythonOperator(
+    task_id='load_to_qdrant',
+    python_callable=load_to_qdrant,
+    dag=dag,
+)
+
+# Зависимости
+scrape_task >> process_task >> load_task
+
+# 6.4. Запуск Airflow:
+airflow webserver --port 8080  # В одном терминале
+airflow scheduler  # В другом терминале
+
+# 6.5. Триггерить DAG из Streamlit (опционально):
+
+# utils/api_client.py:
+def trigger_airflow_dag(dag_id: str, conf: dict = None):
+    """Запустить DAG в Airflow"""
+    response = requests.post(
+        f"{os.getenv('AIRFLOW_URL')}/api/v1/dags/{dag_id}/dagRuns",
+        auth=(os.getenv('AIRFLOW_USERNAME'), os.getenv('AIRFLOW_PASSWORD')),
+        json={'conf': conf or {}}
+    )
+    return response.json()
+
+================================================================================
+7. 🧠 ПОДКЛЮЧЕНИЕ LANGGRAPH (ОРКЕСТРАЦИЯ)
+================================================================================
+
+# 7.1. Установка LangGraph:
+pip install langgraph langchain langchain-openai
+
+# 7.2. Создать графы в backend/langgraph_orchestrator.py:
+
+from langgraph.graph import StateGraph, END
+from typing import TypedDict, List, Annotated
+import operator
+
+# ============ STATE DEFINITIONS ============
+
+class ResumeState(TypedDict):
+    """Состояние для анализа резюме"""
+    raw_text: str
+    extracted_data: dict
+    skills: List[str]
+    experience: List[dict]
+    education: List[dict]
+    embedding: List[float]
+    match_scores: Annotated[List[float], operator.add]
+    recommendations: List[str]
+    overall_score: float
+
+class InterviewState(TypedDict):
+    """Состояние для симуляции интервью"""
+    job_requirements: dict
+    candidate_profile: dict
+    current_question: str
+    candidate_answer: str
+    evaluation: dict
+    next_question: str
+    difficulty: int
+    history: List[dict]
+
+# ============ RESUME ANALYSIS GRAPH ============
+
+def create_resume_graph():
+    """Создать граф анализа резюме"""
+    workflow = StateGraph(ResumeState)
+    
+    # Nodes
+    workflow.add_node("parse", parse_resume_node)
+    workflow.add_node("extract_skills", extract_skills_node)
+    workflow.add_node("analyze_experience", analyze_experience_node)
+    workflow.add_node("generate_embedding", generate_embedding_node)
+    workflow.add_node("match_vacancies", match_vacancies_node)
+    workflow.add_node("generate_recommendations", generate_recommendations_node)
+    
+    # Edges
+    workflow.set_entry_point("parse")
+    workflow.add_edge("parse", "extract_skills")
+    workflow.add_edge("extract_skills", "analyze_experience")
+    workflow.add_edge("analyze_experience", "generate_embedding")
+    workflow.add_edge("generate_embedding", "match_vacancies")
+    workflow.add_edge("match_vacancies", "generate_recommendations")
+    workflow.add_edge("generate_recommendations", END)
+    
+    return workflow.compile()
+
+def parse_resume_node(state: ResumeState):
+    """Парсинг текста резюме"""
+    # ##############
+    # LANGGRAPH INTEGRATION
+    # Здесь используется LLM для извлечения структурированных данных
+    # ##############
+    from langchain_openai import ChatOpenAI
+    
+    llm = ChatOpenAI(model="gpt-4-turbo", temperature=0)
+    
+    prompt = f"""
+    Извлеки структурированные данные из резюме:
+    {state['raw_text'][:4000]}
+    
+    Верни JSON с полями: name, email, phone, skills, experience, education
+    """
+    
+    response = llm.invoke(prompt)
+    # Парсинг ответа...
+    
+    state['extracted_data'] = parsed_data
+    return state
+
+# ... остальные node функции ...
+
+# ============ INTERVIEW SIMULATION GRAPH ============
+
+def create_interview_graph():
+    """Создать граф симуляции интервью"""
+    workflow = StateGraph(InterviewState)
+    
+    workflow.add_node("generate_question", generate_question_node)
+    workflow.add_node("evaluate_answer", evaluate_answer_node)
+    workflow.add_node("adjust_difficulty", adjust_difficulty_node)
+    workflow.add_node("provide_feedback", provide_feedback_node)
+    
+    workflow.set_entry_point("generate_question")
+    workflow.add_edge("generate_question", "evaluate_answer")
+    workflow.add_edge("evaluate_answer", "adjust_difficulty")
+    workflow.add_edge("adjust_difficulty", "provide_feedback")
+    workflow.add_conditional_edges(
+        "provide_feedback",
+        lambda s: "continue" if s['difficulty'] < 10 else "end",
+        {"continue": "generate_question", "end": END}
+    )
+    
+    return workflow.compile()
+
+# ============ FASTAPI INTEGRATION ============
+
+# backend/api.py:
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+from backend.langgraph_orchestrator import create_resume_graph, create_interview_graph
+
+app = FastAPI()
+resume_graph = create_resume_graph()
+interview_graph = create_interview_graph()
+
+class ResumeAnalysisRequest(BaseModel):
+    text: str
+    file_type: str
+
+@app.post("/api/v1/resume/analyze")
+async def analyze_resume(req: ResumeAnalysisRequest):
+    """Эндпоинт для анализа резюме через LangGraph"""
+    try:
+        result = resume_graph.invoke({
+            "raw_text": req.text,
+            "extracted_data": {},
+            "skills": [],
+            "experience": [],
+            "education": [],
+            "embedding": [],
+            "match_scores": [],
+            "recommendations": [],
+            "overall_score": 0
+        })
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# 7.3. Запуск LangGraph сервера (опционально):
+# backend/main.py для LangGraph serving
+from langgraph_sdk import serve
+
+if __name__ == "__main__":
+    serve(
+        graphs={"resume": create_resume_graph(), "interview": create_interview_graph()},
+        host="0.0.0.0",
+        port=8501
+    )
+
+================================================================================
+8. 🔄 ИНТЕГРАЦИЯ С FASTAPI БЭКЕНДОМ
+================================================================================
+
+# 8.1. Структура backend/api.py:
+
+from fastapi import FastAPI, Depends, HTTPException, UploadFile, File
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, Field
+from typing import List, Optional
+import os
+
+app = FastAPI(title="Career Assistant API", version="1.0.0")
+
+# CORS middleware для Streamlit
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:8501", "http://127.0.0.1:8501"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# ============ MODELS ============
+
+class VacancyFilter(BaseModel):
+    location: Optional[str] = None
+    experience: Optional[str] = None
+    salary_min: Optional[int] = None
+    query: Optional[str] = None
+    limit: int = Field(default=50, le=100)
+
+class ResumeAnalysisResponse(BaseModel):
+    name: Optional[str]
+    skills: List[str]
+    experience: List[dict]
+    overall_score: float
+    recommendations: List[str]
+
+# ============ HEALTH CHECK ============
+
+@app.get("/api/v1/health")
+async def health_check():
+    """Проверка доступности API"""
+    return {
+        "status": "healthy",
+        "services": {
+            "qdrant": check_qdrant_health(),
+            "database": check_db_health(),
+            "langgraph": check_langgraph_health()
+        }
+    }
+
+# ============ VACANCIES ============
+
+@app.get("/api/v1/vacancies")
+async def get_vacancies(filters: VacancyFilter = Depends()):
+    """Получить список вакансий с фильтрами"""
+    # ##############
+    # AIRFLOW/QDRANT INTEGRATION
+    # Данные получены из Qdrant, обработаны Airflow ETL
+    # ##############
+    
+    from backend.services.vector_store import search_vacancies
+    
+    results = search_vacancies(
+        location=filters.location,
+        experience=filters.experience,
+        salary_min=filters.salary_min,
+        query=filters.query,
+        limit=filters.limit
+    )
+    
+    return {"vacancies": results, "total": len(results)}
+
+# ============ RESUME ANALYSIS ============
+
+@app.post("/api/v1/resume/analyze")
+async def analyze_resume_endpoint(
+    file: UploadFile = File(...),
+    file_type: str = "pdf"
+):
+    """Анализ резюме через LangGraph"""
+    # ##############
+    # LANGGRAPH INTEGRATION
+    # Вызов графа анализа резюме
+    # ##############
+    
+    from backend.langgraph_orchestrator import resume_graph
+    
+    # Чтение файла
+    content = await file.read()
+    text = extract_text_from_file(content, file_type)
+    
+    # Запуск графа
+    result = resume_graph.invoke({
+        "raw_text": text,
+        # ... initial state ...
+    })
+    
+    return ResumeAnalysisResponse(**result)
+
+# ============ INTERVIEW SIMULATION ============
+
+@app.post("/api/v1/interview/questions")
+async def generate_interview_questions(
+    job_title: str,
+    experience_level: str,
+    tech_stack: List[str]
+):
+    """Генерация вопросов для интервью"""
+    # ##############
+    # LANGGRAPH INTEGRATION
+    # ##############
+    
+    from backend.langgraph_orchestrator import interview_graph
+    
+    result = interview_graph.invoke({
+        "job_requirements": {"title": job_title, "skills": tech_stack},
+        "candidate_profile": {"experience": experience_level},
+        # ... initial state ...
+    })
+    
+    return {"questions": result.get("questions", [])}
+
+# 8.2. Запуск FastAPI:
+# backend/main.py
+import uvicorn
+
+if __name__ == "__main__":
+    uvicorn.run(
+        "backend.api:app",
+        host="0.0.0.0",
+        port=8000,
+        reload=os.getenv("APP_ENV") == "development"
+    )
+
+# Запуск:
+python -m uvicorn backend.api:app --host 0.0.0.0 --port 8000 --reload
+
+================================================================================
+9. 🚀 ЗАПУСК ПРИЛОЖЕНИЯ
+================================================================================
+
+# 9.1. Локальный запуск (разработка):
+
+# Терминал 1: FastAPI бэкенд
+cd frontend
+source venv/bin/activate
+python -m uvicorn backend.api:app --host 0.0.0.0 --port 8000 --reload
+
+# Терминал 2: Qdrant (если не через Docker)
+# Qdrant уже запущен в Docker или как сервис
+
+# Терминал 3: Airflow (опционально)
+airflow webserver --port 8080
+# В другом окне:
+airflow scheduler
+
+# Терминал 4: Streamlit frontend
+cd frontend
+streamlit run app/main.py
+
+# 9.2. Проверка работы:
+# - Открыть http://localhost:8501 в браузере
+# - Проверить что градиентный фон применяется
+# - Проверить загрузку резюме (даже с заглушками)
+# - Проверить отображение вакансий
+
+# 9.3. Docker Compose запуск (продакшен):
+
+# docker/docker-compose.yml:
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: career_db
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+
+  fastapi:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.fastapi
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql://${DB_USER}:${DB_PASSWORD}@postgres:5432/career_db
+      - QDRANT_URL=http://qdrant:6333
+    depends_on:
+      - postgres
+      - qdrant
+
+  streamlit:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.streamlit
+    ports:
+      - "8501:8501"
+    environment:
+      - API_BASE_URL=http://fastapi:8000/api/v1
+    depends_on:
+      - fastapi
+
+  airflow:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.airflow
+    ports:
+      - "8080:8080"
+    environment:
+      - AIRFLOW__CORE__EXECUTOR=LocalExecutor
+    volumes:
+      - ../pipelines:/opt/airflow/dags
+    depends_on:
+      - postgres
+
+volumes:
+  postgres_data:
+  qdrant_data:
+
+# Запуск:
+cd frontend/docker
+docker-compose up -d
+
+# Просмотр логов:
+docker-compose logs -f streamlit
+
+================================================================================
+10. 🔧 УСТРАНЕНИЕ НЕПОЛАДОК
+================================================================================
+
+# ❌ Ошибка: "No module named 'app'"
+# Решение: Исправить импорты - убрать 'app.' из путей:
+# БЫЛО: from app.config import API_BASE_URL
+# СТАЛО: from config import API_BASE_URL
+
+# ❌ Ошибка: "StreamlitSecretNotFoundError"
+# Решение: Создать .streamlit/secrets.toml или использовать os.getenv()
+
+# ❌ Ошибка: "Error opening 'assets/logo.png'"
+# Решение: Использовать Path для абсолютного пути:
+from pathlib import Path
+LOGO_PATH = Path(__file__).parent.parent / "assets" / "logo.png"
+if LOGO_PATH.exists():
+    st.image(str(LOGO_PATH))
+
+# ❌ CSS не применяется на других страницах
+# Решение: Добавить apply_custom_styles() в КАЖДЫЙ файл страницы
+
+# ❌ Градиент не отображается
+# Решение: Проверить styles.py на наличие &quot; &gt; и разорванных слов
+
+# ❌ Qdrant connection refused
+# Решение: Проверить что Qdrant запущен и URL правильный:
+# http://localhost:6333 для локального, http://qdrant:6333 для Docker
+
+# ❌ LangGraph import error
+# Решение: Убедиться что langgraph установлен: pip install langgraph
+
+# 10.1. Полезные команды для отладки:
+
+# Проверить переменные окружения в Streamlit:
+# Добавить в main.py для отладки:
+if st.sidebar.checkbox("🐛 Debug Mode"):
+    st.write("ENV:", os.getenv("APP_ENV"))
+    st.write("API_URL:", os.getenv("API_BASE_URL"))
+    st.write("QDRANT:", os.getenv("QDRANT_URL"))
+
+# Проверить подключение к Qdrant:
+from qdrant_client import QdrantClient
+client = QdrantClient(url="http://localhost:6333")
+print(client.get_collections())  # Должен вернуть список коллекций
+
+# Проверить FastAPI endpoints:
+curl http://localhost:8000/api/v1/health
+
+# Очистить кэш Streamlit:
+# В браузере: Ctrl+Shift+R или Cmd+Shift+R
+# Или удалить папку: ~/.streamlit/cache/
+
+================================================================================
+11. 📊 МОНИТОРИНГ И ЛОГИРОВАНИЕ
+================================================================================
+
+# 11.1. Настройка логирования:
+
+# backend/logging_config.py:
+import logging
+import sys
+
+def setup_logger(name: str, level: str = "INFO"):
+    logger = logging.getLogger(name)
+    logger.setLevel(getattr(logging, level.upper()))
+    
+    handler = logging.StreamHandler(sys.stdout)
+    formatter = logging.Formatter(
+        '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    )
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
+    
+    return logger
+
+# Использование:
+# logger = setup_logger(__name__)
+# logger.info("Resume analysis started")
+
+# 11.2. Мониторинг в Streamlit:
+
+# app/components/monitoring.py:
+def render_system_monitor():
+    """Отобразить статус систем"""
+    with st.expander("🔍 System Health", expanded=False):
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            status = check_api_health()
+            st.metric("API", "🟢 Online" if status else "🔴 Offline")
+        
+        with col2:
+            status = check_qdrant_health()
+            st.metric("Qdrant", "🟢 Online" if status else "🔴 Offline")
+        
+        with col3:
+            status = check_airflow_health()
+            st.metric("Airflow", "🟢 Online" if status else "🔴 Offline")
+
+# 11.3. Prometheus метрики (опционально для продакшена):
+
+# backend/metrics.py:
+from prometheus_client import Counter, Histogram, start_http_server
+
+REQUEST_COUNT = Counter('api_requests_total', 'Total API requests', ['endpoint'])
+REQUEST_LATENCY = Histogram('api_request_duration_seconds', 'Request latency')
+
+def track_request(endpoint: str):
+    def decorator(func):
+        def wrapper(*args, **kwargs):
+            REQUEST_COUNT.labels(endpoint=endpoint).inc()
+            with REQUEST_LATENCY.time():
+                return func(*args, **kwargs)
+        return wrapper
+    return decorator
+
+================================================================================
+🎉 ГОТОВО! ПРИЛОЖЕНИЕ ЗАПУЩЕНО
+================================================================================
+
+✅ Проверьте:
+- [ ] Градиентный фон на всех страницах
+- [ ] Кнопки с правильным градиентом
+- [ ] Sidebar с контрастным текстом
+- [ ] Загрузка резюме (даже с заглушками)
+- [ ] Отображение вакансий из тестовых данных
+- [ ] Подключение к Qdrant (если настроено)
+- [ ] Работа LangGraph графов (если настроено)
+
+📞 Поддержка:
+- Логи: docker-compose logs -f [service_name]
+- API docs: http://localhost:8000/docs
+- Airflow UI: http://localhost:8080
+- Streamlit: http://localhost:8501
+
+🔄 Обновление:
+1. git pull origin main
+2. pip install -r requirements.txt --upgrade
+3. docker-compose down && docker-compose up -d --build
+
+================================================================================
+📝 ЗАМЕТКИ ДЛЯ РАЗРАБОТЧИКОВ
+================================================================================
+
+# Заглушки для интеграций (поиск по коду):
+# ##############
+# LANGGRAPH INTEGRATION POINT
+# ##############
+
+# ##############
+# QDRANT INTEGRATION
+# ##############
+
+# ##############
+# AIRFLOW PIPELINE PLACEHOLDER
+# ##############
+
+# При реализации замените заглушки на реальный код!
+
+# Тестирование:
+# - pytest tests/  # Запуск тестов
+# - streamlit run app/main.py --server.headless true  # Headless режим
+
+# Деплой:
+# - Vercel/Streamlit Cloud для frontend
+# - AWS/GCP для backend сервисов
+# - Managed Qdrant Cloud для векторной базы
+
+================================================================================
