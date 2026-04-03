@@ -14,7 +14,7 @@
 
 ## 🚀 Архитектура проекта
 
-![Architecture](CareerAssistantStars/frontend/assets/logo.png)
+![Architecture](frontend/assets/logo.png)
 
 ### Основные блоки:
 
@@ -104,40 +104,26 @@
 ### 1. Клонирование
 
 ```bash
-git clone https://github.com/your-repo/ai-career-assistant.git
-cd ai-career-assistant
+git clone git@github.com:GitArkad/CareerAssistantStars.git
+cd careerassistantstars
 ```
 
-### 2. Запуск через Docker
+### 2. Запуск через проекта
 
 ```bash
 docker-compose up --build
 ```
 
-### 3. Backend
-
-```bash
-cd backend
-uvicorn app.main:app --reload
-```
-
-### 4. Frontend
-
-```bash
-cd frontend
-streamlit run app/main.py
-```
-
----
-
 ## 📁 Структура проекта
 
 ```
 project/
+├── airflow.
 ├── backend/
 ├── frontend/
 ├── dags/
 ├── data/
+├── docker_files/
 ├── docker-compose.yml
 └── README.md
 ```
